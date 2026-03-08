@@ -19,53 +19,58 @@ class TestDefaults:
 
     def test_default_embedder(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.embedder == "mpnet"
 
     def test_default_vector_dimensions(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.vector_dimensions == 768
 
     def test_default_max_chunk_chars(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.max_chunk_chars == 4000
 
     def test_default_min_chunk_chars(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.min_chunk_chars == 100
 
     def test_default_overlap_chars(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.overlap_chars == 200
 
     def test_default_max_response_bytes(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.max_response_bytes == 65000
 
     def test_default_supabase_url_empty(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.supabase_url == ""
 
     def test_default_log_level(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.log_level == "INFO"
 
     def test_default_ollama_url(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.ollama_url == "http://localhost:11434"
 
     def test_default_ollama_model(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.ollama_model == "nomic-embed-text"
+
+    def test_default_min_search_score(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            s = Settings(_env_file=None)
+        assert s.min_search_score == pytest.approx(0.65)
 
 
 class TestEnvOverrides:
@@ -90,6 +95,11 @@ class TestEnvOverrides:
         with patch.dict(os.environ, {"CEREFOX_MAX_RESPONSE_BYTES": "32000"}):
             s = Settings()
         assert s.max_response_bytes == 32000
+
+    def test_min_search_score_override(self) -> None:
+        with patch.dict(os.environ, {"CEREFOX_MIN_SEARCH_SCORE": "0.5"}):
+            s = Settings()
+        assert s.min_search_score == pytest.approx(0.5)
 
     def test_log_level_override(self) -> None:
         with patch.dict(os.environ, {"CEREFOX_LOG_LEVEL": "DEBUG"}):
@@ -126,7 +136,7 @@ class TestHelperMethods:
 
     def test_not_configured_when_empty(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            s = Settings()
+            s = Settings(_env_file=None)
         assert s.is_supabase_configured() is False
         assert s.is_db_configured() is False
 

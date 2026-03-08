@@ -150,10 +150,14 @@ Functions / RPCs:
   ✓  cerefox_fts_search()
   ✓  cerefox_semantic_search()
   ✓  cerefox_reconstruct_doc()
+  ✓  cerefox_save_note()
+  ✓  cerefox_search_docs()
+  ✓  cerefox_context_expand()
 
 Indexes:
   ✓  idx_cerefox_chunks_fts
   ✓  idx_cerefox_chunks_emb_primary
+  ✓  idx_cerefox_chunks_emb_upgrade
   ✓  idx_cerefox_chunks_document
   ✓  idx_cerefox_docs_metadata
   ✓  idx_cerefox_docs_project

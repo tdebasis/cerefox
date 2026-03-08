@@ -98,6 +98,7 @@ class TestSearchMethods:
                 "p_alpha": 0.8,
                 "p_use_upgrade": False,
                 "p_project_id": None,
+                "p_min_score": 0.0,
             },
         )
 
@@ -146,6 +147,37 @@ class TestSearchMethods:
         mock_supabase_client.rpc.return_value.execute.return_value.data = []
         result = cerefox_client.reconstruct_doc("nonexistent-id")
         assert result is None
+
+    def test_search_docs_params(
+        self,
+        cerefox_client: CerefoxClient,
+        mock_supabase_client: MagicMock,
+        sample_embedding: list[float],
+    ) -> None:
+        mock_supabase_client.rpc.return_value.execute.return_value.data = []
+        cerefox_client.search_docs("my query", sample_embedding, match_count=3, alpha=0.6)
+        mock_supabase_client.rpc.assert_called_once_with(
+            "cerefox_search_docs",
+            {
+                "p_query_text": "my query",
+                "p_query_embedding": sample_embedding,
+                "p_match_count": 3,
+                "p_alpha": 0.6,
+                "p_project_id": None,
+                "p_min_score": 0.0,
+            },
+        )
+
+    def test_search_docs_returns_rows(
+        self,
+        cerefox_client: CerefoxClient,
+        mock_supabase_client: MagicMock,
+        sample_embedding: list[float],
+    ) -> None:
+        expected = [{"document_id": "doc-1", "doc_title": "Note", "best_score": 0.9}]
+        mock_supabase_client.rpc.return_value.execute.return_value.data = expected
+        result = cerefox_client.search_docs("q", sample_embedding)
+        assert result == expected
 
 
 class TestDocumentMethods:

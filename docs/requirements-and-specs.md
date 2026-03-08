@@ -154,8 +154,8 @@ This makes it easy to filter, audit, or exclude agent-authored content from sear
 |----|-------------|----------|
 | FR-7.1 | `cerefox ingest <file>` — ingest a markdown file | P0 |
 | FR-7.2 | `cerefox search <query>` — search the knowledge base | P0 |
-| FR-7.3 | `cerefox list` — list documents | P0 |
-| FR-7.4 | `cerefox delete <id>` — delete a document and its chunks | P0 |
+| FR-7.3 | `cerefox list-docs` — list documents | P0 |
+| FR-7.4 | `cerefox delete-doc <id>` — delete a document and its chunks | P0 |
 | FR-7.5 | `cerefox projects` — list/manage projects | P1 |
 
 ### FR-8: Backup & Export

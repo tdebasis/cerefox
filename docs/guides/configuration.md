@@ -66,6 +66,24 @@ cp .env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CEREFOX_MAX_RESPONSE_BYTES` | `65000` | Maximum bytes in a single search response. Set to Supabase MCP's limit by default. Reduce if using a custom MCP client with lower limits. |
+| `CEREFOX_MIN_SEARCH_SCORE` | `0.65` | Minimum cosine similarity for hybrid and semantic search results (0.0–1.0). In **hybrid search**, chunks that matched the FTS keyword operator (`@@`) always pass through regardless of their vector score — the threshold only filters vector-only results. In **semantic search**, all results are filtered. The pure **FTS search** mode is unaffected. Increase for stricter precision; decrease for wider recall. |
+
+**Score threshold guidance (all-mpnet-base-v2):**
+
+Sentence-transformer cosine scores are **not** percentage-of-similarity. The score distribution for `all-mpnet-base-v2` is:
+
+| Score | Meaning |
+|-------|---------|
+| 0.0 – 0.35 | Noise floor — even unrelated sentences land here |
+| 0.35 – 0.55 | Weak/tangential overlap — same domain, different topic |
+| 0.55 – 0.75 | Genuine semantic match — related concepts, paraphrases |
+| 0.75 – 1.0 | High similarity — near-duplicate or very direct answer |
+
+Recommended values:
+- `0.65` (default) — filters noise and weak matches, keeps genuine results
+- `0.55`–`0.60` — wider recall; useful for small corpora or exploratory search
+- `0.75`–`0.80` — high precision; only very close semantic matches
+- `0.0` — disable filtering entirely (returns all RPC results, not recommended)
 
 ---
 

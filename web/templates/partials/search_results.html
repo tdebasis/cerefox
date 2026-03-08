@@ -1,0 +1,58 @@
+{% if error %}
+<div class="flash-error">⚠ {{ error }}</div>
+{% elif results and results.results %}
+<p style="color:var(--pico-muted-color);font-size:0.85rem;">
+  {{ results.total_found }} {% if view == 'docs' %}document(s){% else %}result(s){% endif %}
+  for <em>"{{ results.query }}"</em>
+  {% if results.truncated %} — <strong>truncated</strong> to fit response limit{% endif %}
+</p>
+
+{% if view == 'docs' %}
+  {# ── Document-level results ─────────────────────────────────────────────── #}
+  {% for hit in results.results %}
+  <div class="result-item">
+    {% if hit.best_chunk_heading_path %}
+    <div class="breadcrumb">
+      {% for part in hit.best_chunk_heading_path %}
+      <span>{{ part }}</span>
+      {% endfor %}
+      <span style="font-size:0.75rem;color:var(--pico-muted-color);"> (best section)</span>
+    </div>
+    {% endif %}
+    <div>
+      <span class="score-pill">{{ "%.2f"|format(hit.best_score) }}</span>
+      <a href="/document/{{ hit.document_id }}" style="font-weight:600;">{{ hit.doc_title }}</a>
+      <span style="color:var(--pico-muted-color);font-size:0.8rem;margin-left:0.75rem;">
+        {{ hit.chunk_count }} sections · {{ hit.total_chars }} chars
+      </span>
+    </div>
+    <p class="result-content">{{ hit.full_content[:600] }}{% if hit.full_content|length > 600 %}…{% endif %}</p>
+  </div>
+  {% endfor %}
+
+{% else %}
+  {# ── Chunk-level results ────────────────────────────────────────────────── #}
+  {% for hit in results.results %}
+  <div class="result-item">
+    <div class="breadcrumb">
+      {% for part in hit.heading_path %}
+      <span>{{ part }}</span>
+      {% endfor %}
+    </div>
+    <div>
+      <span class="score-pill">{{ "%.2f"|format(hit.score) }}</span>
+      <a href="/document/{{ hit.document_id }}" style="font-weight:600;">{{ hit.doc_title }}</a>
+      {% if hit.title and hit.title != hit.doc_title %}
+      <span style="color:var(--pico-muted-color);"> › {{ hit.title }}</span>
+      {% endif %}
+    </div>
+    <p class="result-content">{{ hit.content[:400] }}{% if hit.content|length > 400 %}…{% endif %}</p>
+  </div>
+  {% endfor %}
+{% endif %}
+
+{% elif results %}
+<div class="empty-state">
+  <p>No results found for <em>"{{ results.query }}"</em>. Try a different query or search mode.</p>
+</div>
+{% endif %}

@@ -40,6 +40,15 @@ class Settings(BaseSettings):
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     max_response_bytes: int = 65000
+    # Minimum cosine similarity score for hybrid and semantic search results (0.0–1.0).
+    # Results with a vector similarity below this threshold are dropped before returning.
+    # FTS results are not affected (ts_rank_cd scores are on a different scale).
+    #
+    # NOTE: sentence-transformer cosine scores are NOT percentage-of-similarity.
+    # For all-mpnet-base-v2, 0.0–0.35 is the noise floor (even unrelated sentences
+    # land here). Genuine semantic matches typically score 0.55+. 0.65 is a good
+    # default — raise toward 0.80 for stricter precision, lower to 0.50 for recall.
+    min_search_score: float = 0.65
 
     # ── Storage ───────────────────────────────────────────────────────────────
     backup_dir: str = "./backups"

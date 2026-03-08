@@ -24,6 +24,7 @@
 - [ ] Investigate smaller/faster models (e.g., all-MiniLM-L6-v2) for quick primary embeddings
 
 ### Ingestion
+- [ ] **Bug: rollback document insert if embedding/chunk-insert fails** — currently if the pipeline crashes after inserting the document row but before inserting chunks, the document exists with no chunks and subsequent retries are silently skipped as duplicates. Fix: delete the document row on any exception after insert, or use a DB transaction.
 - [ ] Support ingesting from URLs (fetch page, convert to markdown)
 - [ ] Support ingesting from clipboard
 - [ ] EPUB → Markdown converter
@@ -45,6 +46,8 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] Relevance feedback loop (mark results as relevant/irrelevant to improve ranking)
 
 ### Web UI
+- [ ] Metadata entry on ingest form (key/value editor or raw JSON textarea) — CLI supports --metadata already, web UI doesn't expose it
+- [ ] Collapse "Full content" section on document page into a `<details>` toggle — currently always visible which is noisy for long documents
 - [ ] Search-as-you-type with HTMX
 - [ ] Chunk boundary visualization in document viewer
 - [ ] Embedding similarity heatmap (visualize chunk relationships)

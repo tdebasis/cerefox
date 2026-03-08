@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Projects — Cerefox{% endblock %}
+
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+  <h1 style="margin:0;">Projects</h1>
+</div>
+
+<div class="grid" style="grid-template-columns: 2fr 1fr; gap: 2rem; align-items: start;">
+
+  {# ── Project list ── #}
+  <section>
+    {% if projects %}
+    <figure>
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Description</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for proj in projects %}
+          <tr>
+            <td>
+              <strong>{{ proj.name }}</strong>
+            </td>
+            <td>{{ proj.description or "—" }}</td>
+            <td>
+              <a href="/search?project_id={{ proj.id }}" role="button" class="outline secondary" style="font-size:0.8rem;padding:0.2rem 0.6rem;">Browse</a>
+              <form method="post" action="/projects/{{ proj.id }}/delete" style="display:inline;"
+                    onsubmit="return confirm('Delete project {{ proj.name }}? Documents are kept.')">
+                <button type="submit" class="outline contrast" style="font-size:0.8rem;padding:0.2rem 0.6rem;">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </figure>
+    {% else %}
+    <div class="empty-state">
+      <p>No projects yet. Create one to organise your documents.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ── Create project form ── #}
+  <article>
+    <header><strong>Create project</strong></header>
+    <form method="post" action="/projects">
+      <label>
+        Name <span style="color:var(--pico-del-color);">*</span>
+        <input type="text" name="name" required placeholder="e.g. Work notes">
+      </label>
+      <label>
+        Description
+        <input type="text" name="description" placeholder="Optional description">
+      </label>
+      <button type="submit">Create project</button>
+    </form>
+  </article>
+
+</div>
+{% endblock %}

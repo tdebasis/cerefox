@@ -1,0 +1,397 @@
+"""Cerefox command-line interface.
+
+Usage::
+
+    cerefox ingest my-note.md --project "personal"
+    cerefox ingest --title "My Thought" --paste   # reads from stdin
+    cerefox search "my query" --mode hybrid
+    cerefox list-docs
+    cerefox list-docs --project "personal"
+    cerefox delete-doc <document-id>
+    cerefox list-projects
+    cerefox web                                   # start the web UI
+"""
+
+from __future__ import annotations
+
+import sys
+
+import click
+
+from cerefox.config import Settings
+
+
+# ── Root group ────────────────────────────────────────────────────────────────
+
+
+@click.group()
+@click.version_option()
+def cli() -> None:
+    """Cerefox — personal second brain knowledge backend."""
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _get_client(settings: Settings):
+    """Return an initialised CerefoxClient, exiting cleanly if not configured."""
+    from cerefox.db.client import CerefoxClient  # noqa: PLC0415
+
+    if not settings.is_supabase_configured():
+        click.echo(
+            "❌  Supabase is not configured.\n"
+            "    Set CEREFOX_SUPABASE_URL and CEREFOX_SUPABASE_KEY in your .env file.",
+            err=True,
+        )
+        sys.exit(1)
+    return CerefoxClient(settings)
+
+
+def _get_embedder(settings: Settings):
+    """Return the configured embedder instance."""
+    if settings.embedder == "ollama":
+        from cerefox.embeddings.ollama_embed import OllamaEmbedder  # noqa: PLC0415
+
+        return OllamaEmbedder(base_url=settings.ollama_url, model=settings.ollama_model)
+    from cerefox.embeddings.mpnet import MpnetEmbedder  # noqa: PLC0415
+
+    return MpnetEmbedder()
+
+
+# ── ingest ────────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("path", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--title", "-t", default=None, help="Document title (defaults to filename stem).")
+@click.option("--project", "-p", default=None, help="Project name to assign the document to.")
+@click.option(
+    "--paste",
+    is_flag=True,
+    default=False,
+    help="Read markdown from stdin instead of a file.  --title is required.",
+)
+@click.option(
+    "--metadata",
+    "-m",
+    default=None,
+    help="Extra metadata as a JSON string, e.g. '{\"tags\":[\"work\"]}'.",
+)
+def ingest(
+    path: str | None,
+    title: str | None,
+    project: str | None,
+    paste: bool,
+    metadata: str | None,
+) -> None:
+    """Ingest a markdown, PDF, or DOCX file (or stdin) into the knowledge base."""
+    import json  # noqa: PLC0415
+
+    from cerefox.chunking.converters import convert_to_markdown  # noqa: PLC0415
+    from cerefox.ingestion.pipeline import IngestionPipeline  # noqa: PLC0415
+
+    # Validate inputs before touching external services.
+    if paste and not title:
+        click.echo("❌  --title is required when using --paste.", err=True)
+        sys.exit(1)
+    if not paste and not path:
+        click.echo("❌  Provide a file PATH or use --paste to read from stdin.", err=True)
+        sys.exit(1)
+
+    settings = Settings()
+    client = _get_client(settings)
+    embedder = _get_embedder(settings)
+    pipeline = IngestionPipeline(client, embedder, settings)
+
+    # Parse metadata JSON if supplied.
+    extra_meta: dict = {}
+    if metadata:
+        try:
+            extra_meta = json.loads(metadata)
+        except json.JSONDecodeError as exc:
+            click.echo(f"❌  Invalid --metadata JSON: {exc}", err=True)
+            sys.exit(1)
+
+    if paste:
+        text = sys.stdin.read()
+        result = pipeline.ingest_text(
+            text=text, title=title, source="paste", project_name=project, metadata=extra_meta
+        )
+    else:
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        p = _Path(path)
+        if p.suffix.lower() in (".pdf", ".docx"):
+            try:
+                text = convert_to_markdown(p)
+            except ImportError as exc:
+                click.echo(f"❌  {exc}", err=True)
+                sys.exit(1)
+            result = pipeline.ingest_text(
+                text=text,
+                title=title or p.stem,
+                source="file",
+                source_path=str(p),
+                project_name=project,
+                metadata=extra_meta,
+            )
+        else:
+            result = pipeline.ingest_file(
+                path=path, title=title, project_name=project, metadata=extra_meta
+            )
+
+    if result.skipped:
+        click.echo(f"⏭  Skipped (already ingested): {result.title}")
+    else:
+        click.echo(
+            f"✓  Ingested: {result.title}\n"
+            f"   Document ID : {result.document_id}\n"
+            f"   Chunks      : {result.chunk_count}\n"
+            f"   Total chars : {result.total_chars:,}"
+        )
+        if result.project_id:
+            click.echo(f"   Project ID  : {result.project_id}")
+
+
+# ── ingest-dir ────────────────────────────────────────────────────────────────
+
+
+@cli.command("ingest-dir")
+@click.argument("directory", type=click.Path(exists=True, file_okay=False, dir_okay=True))
+@click.option(
+    "--pattern",
+    default="*.md",
+    show_default=True,
+    help="Glob pattern for files to ingest (e.g. '*.md', '**/*.md', '*.pdf').",
+)
+@click.option("--project", "-p", default=None, help="Project name to assign all documents to.")
+@click.option(
+    "--recursive/--no-recursive",
+    default=False,
+    show_default=True,
+    help="Recurse into sub-directories.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print files that would be ingested without actually ingesting them.",
+)
+def ingest_dir(
+    directory: str,
+    pattern: str,
+    project: str | None,
+    recursive: bool,
+    dry_run: bool,
+) -> None:
+    """Ingest all matching files in a directory."""
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from cerefox.chunking.converters import convert_to_markdown  # noqa: PLC0415
+    from cerefox.ingestion.pipeline import IngestionPipeline  # noqa: PLC0415
+
+    d = _Path(directory)
+    glob_fn = d.rglob if recursive else d.glob
+    files = sorted(glob_fn(pattern))
+
+    if not files:
+        click.echo(f"No files matching '{pattern}' found in {directory}")
+        return
+
+    click.echo(f"Found {len(files)} file(s).")
+
+    if dry_run:
+        for f in files:
+            click.echo(f"  {f}")
+        return
+
+    settings = Settings()
+    client = _get_client(settings)
+    embedder = _get_embedder(settings)
+    pipeline = IngestionPipeline(client, embedder, settings)
+
+    ingested = skipped = errors = 0
+    for f in files:
+        try:
+            if f.suffix.lower() in (".pdf", ".docx"):
+                text = convert_to_markdown(f)
+                result = pipeline.ingest_text(
+                    text=text,
+                    title=f.stem,
+                    source="file",
+                    source_path=str(f),
+                    project_name=project,
+                )
+            else:
+                result = pipeline.ingest_file(path=str(f), project_name=project)
+
+            if result.skipped:
+                click.echo(f"  ⏭  {f.name}  (already ingested)")
+                skipped += 1
+            else:
+                click.echo(f"  ✓  {f.name}  ({result.chunk_count} chunks)")
+                ingested += 1
+        except Exception as exc:
+            click.echo(f"  ❌  {f.name}: {exc}", err=True)
+            errors += 1
+
+    click.echo(f"\nDone. Ingested={ingested}  Skipped={skipped}  Errors={errors}")
+
+
+# ── search ────────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.argument("query")
+@click.option(
+    "--mode",
+    "-m",
+    type=click.Choice(["hybrid", "fts", "semantic"], case_sensitive=False),
+    default="hybrid",
+    show_default=True,
+    help="Search mode.",
+)
+@click.option("--count", "-n", default=10, show_default=True, help="Number of results to request.")
+@click.option("--project", "-p", default=None, help="Limit search to a project UUID.")
+@click.option("--alpha", default=0.7, show_default=True, help="FTS/semantic weight (hybrid only).")
+@click.option(
+    "--min-score",
+    default=None,
+    type=float,
+    help=(
+        "Minimum relevance score threshold (0.0–1.0). "
+        "Overrides CEREFOX_MIN_SEARCH_SCORE. Not applied to FTS."
+    ),
+)
+def search(
+    query: str,
+    mode: str,
+    count: int,
+    project: str | None,
+    alpha: float,
+    min_score: float | None,
+) -> None:
+    """Search the knowledge base."""
+    from cerefox.retrieval.search import SearchClient  # noqa: PLC0415
+
+    settings = Settings()
+    if min_score is not None:
+        settings.min_search_score = min_score
+    client = _get_client(settings)
+    embedder = _get_embedder(settings)
+    sc = SearchClient(client, embedder, settings)
+
+    if mode == "hybrid":
+        resp = sc.hybrid(query, match_count=count, alpha=alpha, project_id=project)
+    elif mode == "fts":
+        resp = sc.fts(query, match_count=count, project_id=project)
+    else:
+        resp = sc.semantic(query, match_count=count, project_id=project)
+
+    if not resp.results:
+        click.echo("No results found.")
+        return
+
+    click.echo(f"Search: {query!r}  mode={mode}  found={resp.total_found}")
+    if resp.truncated:
+        click.echo(f"⚠  Response truncated at {resp.response_bytes:,} bytes.")
+    click.echo("─" * 80)
+
+    for i, hit in enumerate(resp.results, 1):
+        breadcrumb = " › ".join(hit.heading_path) if hit.heading_path else hit.doc_title
+        click.echo(f"\n[{i}] {breadcrumb}  (score={hit.score:.3f})")
+        click.echo(f"    Doc: {hit.doc_title}  ({hit.doc_source})")
+        # Show a preview of the content (first 300 chars).
+        preview = hit.content[:300].replace("\n", " ")
+        if len(hit.content) > 300:
+            preview += "…"
+        click.echo(f"    {preview}")
+
+    click.echo(f"\n{len(resp.results)} result(s) shown  ({resp.response_bytes:,} bytes).")
+
+
+# ── list-docs ─────────────────────────────────────────────────────────────────
+
+
+@cli.command("list-docs")
+@click.option("--project", "-p", default=None, help="Filter by project ID or name.")
+@click.option("--limit", "-n", default=20, show_default=True, help="Maximum rows to show.")
+def list_docs(project: str | None, limit: int) -> None:
+    """List documents in the knowledge base."""
+    settings = Settings()
+    client = _get_client(settings)
+    docs = client.list_documents(project_id=project, limit=limit)
+
+    if not docs:
+        click.echo("No documents found.")
+        return
+
+    click.echo(f"{'ID':<38}  {'Chunks':>6}  {'Chars':>8}  Title")
+    click.echo("─" * 80)
+    for doc in docs:
+        click.echo(
+            f"{doc['id']:<38}  {doc.get('chunk_count', 0):>6}  "
+            f"{doc.get('total_chars', 0):>8,}  {doc['title']}"
+        )
+    click.echo(f"\n{len(docs)} document(s) shown.")
+
+
+# ── delete-doc ────────────────────────────────────────────────────────────────
+
+
+@cli.command("delete-doc")
+@click.argument("document_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def delete_doc(document_id: str, yes: bool) -> None:
+    """Delete a document and all its chunks by ID."""
+    settings = Settings()
+    client = _get_client(settings)
+
+    if not yes:
+        click.confirm(
+            f"Delete document {document_id} and all its chunks?", default=False, abort=True
+        )
+
+    client.delete_document(document_id)
+    click.echo(f"✓  Deleted document {document_id}")
+
+
+# ── list-projects ─────────────────────────────────────────────────────────────
+
+
+@cli.command("list-projects")
+def list_projects() -> None:
+    """List all projects."""
+    settings = Settings()
+    client = _get_client(settings)
+    projects = client.list_projects()
+
+    if not projects:
+        click.echo("No projects found.")
+        return
+
+    click.echo(f"{'ID':<38}  Name")
+    click.echo("─" * 60)
+    for proj in projects:
+        click.echo(f"{proj['id']:<38}  {proj['name']}")
+    click.echo(f"\n{len(projects)} project(s).")
+
+
+# ── web ───────────────────────────────────────────────────────────────────────
+
+
+@cli.command("web")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Bind address.")
+@click.option("--port", default=8000, show_default=True, help="Port to listen on.")
+@click.option("--reload", is_flag=True, default=False, help="Enable auto-reload (development).")
+def web(host: str, port: int, reload: bool) -> None:
+    """Start the Cerefox web UI."""
+    import uvicorn
+
+    click.echo(f"Starting Cerefox web UI at http://{host}:{port}")
+    uvicorn.run(
+        "cerefox.api.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )

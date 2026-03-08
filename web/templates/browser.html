@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Search — Cerefox{% endblock %}
+
+{% block content %}
+<h1>Knowledge Browser</h1>
+
+<form hx-get="/search" hx-target="#results" hx-push-url="true" hx-indicator="#search-spinner">
+  <div class="grid">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search your knowledge base…" autofocus>
+    <select name="mode">
+      <option value="hybrid" {% if mode == 'hybrid' %}selected{% endif %}>Hybrid chunks</option>
+      <option value="fts" {% if mode == 'fts' %}selected{% endif %}>Keyword chunks</option>
+      <option value="semantic" {% if mode == 'semantic' %}selected{% endif %}>Semantic chunks</option>
+      <option value="docs" {% if mode == 'docs' %}selected{% endif %}>Documents (full)</option>
+    </select>
+    {% if projects %}
+    <select name="project_id">
+      <option value="">All projects</option>
+      {% for p in projects %}
+      <option value="{{ p.id }}" {% if project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+    {% endif %}
+    <button type="submit">
+      <span id="search-spinner" class="htmx-indicator">⟳</span> Search
+    </button>
+  </div>
+  <input type="hidden" name="count" value="{{ count }}">
+</form>
+
+<div id="results">
+  {% if query %}
+    {% include "partials/search_results.html" %}
+  {% else %}
+  <div class="empty-state">
+    <p>Enter a query above to search your knowledge base.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

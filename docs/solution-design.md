@@ -252,12 +252,14 @@ class Embedder(Protocol):
 
 ### 5.1 Search RPCs
 
-Four main RPCs exposed via Supabase MCP:
+RPCs exposed via Supabase MCP:
 
 1. **`cerefox_hybrid_search`** — fuses FTS and vector similarity with configurable alpha weight
 2. **`cerefox_fts_search`** — keyword/exact search only (names, dates, tags)
 3. **`cerefox_semantic_search`** — pure vector similarity (conceptual questions)
-4. **`cerefox_reconstruct_doc`** — reassemble a full document from its chunks
+4. **`cerefox_search_docs`** — document-level hybrid search; deduplicates by document, returns full content
+5. **`cerefox_reconstruct_doc`** — reassemble a full document from its chunks by document ID
+6. **`cerefox_context_expand`** — small-to-big: given chunk IDs, return those chunks plus adjacent neighbours
 
 ### 5.2 Small-to-Big Retrieval
 
@@ -275,15 +277,14 @@ When a search returns chunks, agents often need more context. The retrieval stra
 5. Return with metadata indicating what was included/truncated
 ```
 
-**Algorithm (V1 - simplified):**
+**Algorithm (V1 - implemented):**
 - Return individual chunks with `document_id` in metadata
 - Agent can call `cerefox_reconstruct_doc` for full document context
 - Response size is checked against `MAX_RESPONSE_BYTES` (default: 65000)
 
-**Algorithm (V2 - planned):**
-- `cerefox_expand_context` RPC: given a chunk ID, return the chunk plus N adjacent siblings
-- Automatically assemble content that fits within response limit
-- Track total bytes, stop adding when limit approached
+**Algorithm (V2 - implemented):**
+- `cerefox_context_expand` RPC: given an array of chunk IDs, return those chunks plus N adjacent siblings within the same document (`p_window_size`, default 1)
+- `cerefox_search_docs` RPC: full document-level search — runs hybrid search internally, deduplicates by document, returns reconstructed full content for the top N distinct documents
 
 ### 5.3 Response Size Management
 
@@ -385,10 +386,12 @@ Supabase natively exposes Postgres RPCs as MCP tools. This means:
 
 | Tool (RPC) | Direction | Description |
 |------------|-----------|-------------|
-| `cerefox_hybrid_search` | Read | Fused FTS + semantic search |
+| `cerefox_hybrid_search` | Read | Fused FTS + semantic search (chunk-level) |
 | `cerefox_fts_search` | Read | Keyword/exact search |
 | `cerefox_semantic_search` | Read | Pure vector similarity |
-| `cerefox_reconstruct_doc` | Read | Reassemble full document from chunks |
+| `cerefox_search_docs` | Read | Document-level hybrid search; returns full notes deduplicated by document |
+| `cerefox_reconstruct_doc` | Read | Reassemble full document from chunks by document ID |
+| `cerefox_context_expand` | Read | Small-to-big: expand chunk results with adjacent neighbours |
 | `cerefox_save_note` | **Write** | Agent saves a note/insight into the knowledge base |
 
 ### 9.3 Agent Write: `cerefox_save_note`

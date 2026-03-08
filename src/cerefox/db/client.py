@@ -146,6 +146,24 @@ class CerefoxClient:
             logger.error("insert_chunks failed: %s", exc)
             raise RuntimeError(f"insert_chunks failed: {exc}") from exc
 
+    def list_chunks_for_document(self, document_id: str) -> list[dict[str, Any]]:
+        """Return all chunks for a document, ordered by chunk_index."""
+        try:
+            response = (
+                self.client.table("cerefox_chunks")
+                .select(
+                    "id, document_id, chunk_index, heading_path, heading_level, "
+                    "title, content, char_count, embedder_primary, created_at"
+                )
+                .eq("document_id", document_id)
+                .order("chunk_index")
+                .execute()
+            )
+            return response.data or []
+        except Exception as exc:
+            logger.error("list_chunks_for_document failed: %s", exc)
+            raise RuntimeError(f"list_chunks_for_document failed: {exc}") from exc
+
     # ── Projects ───────────────────────────────────────────────────────────────
 
     def get_or_create_project(self, name: str, description: str = "") -> dict[str, Any]:
@@ -189,6 +207,43 @@ class CerefoxClient:
             logger.error("list_projects failed: %s", exc)
             raise RuntimeError(f"list_projects failed: {exc}") from exc
 
+    def create_project(self, name: str, description: str = "") -> dict[str, Any]:
+        """Create a new project and return the created row."""
+        try:
+            response = (
+                self.client.table("cerefox_projects")
+                .insert({"name": name, "description": description})
+                .execute()
+            )
+            if not response.data:
+                raise RuntimeError("Project creation returned no data")
+            return response.data[0]
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.error("create_project failed: %s", exc)
+            raise RuntimeError(f"create_project failed: {exc}") from exc
+
+    def delete_project(self, project_id: str) -> None:
+        """Delete a project by ID. Documents assigned to it are not deleted."""
+        try:
+            self.client.table("cerefox_projects").delete().eq("id", project_id).execute()
+        except Exception as exc:
+            logger.error("delete_project failed: %s", exc)
+            raise RuntimeError(f"delete_project failed: {exc}") from exc
+
+    def count_documents(self, project_id: str | None = None) -> int:
+        """Return the total number of documents, optionally filtered by project."""
+        try:
+            query = self.client.table("cerefox_documents").select("id", count="exact").limit(1)
+            if project_id:
+                query = query.eq("project_id", project_id)
+            response = query.execute()
+            return response.count or 0
+        except Exception as exc:
+            logger.error("count_documents failed: %s", exc)
+            raise RuntimeError(f"count_documents failed: {exc}") from exc
+
     # ── Search (convenience wrappers around RPCs) ──────────────────────────────
 
     def hybrid_search(
@@ -199,6 +254,7 @@ class CerefoxClient:
         alpha: float = 0.7,
         use_upgrade: bool = False,
         project_id: str | None = None,
+        min_score: float = 0.0,
     ) -> list[dict[str, Any]]:
         """Hybrid FTS + semantic search."""
         return self.rpc(
@@ -210,6 +266,7 @@ class CerefoxClient:
                 "p_alpha": alpha,
                 "p_use_upgrade": use_upgrade,
                 "p_project_id": project_id,
+                "p_min_score": min_score,
             },
         )
 
@@ -247,7 +304,71 @@ class CerefoxClient:
             },
         )
 
+    def search_docs(
+        self,
+        query_text: str,
+        query_embedding: list[float],
+        match_count: int = 5,
+        alpha: float = 0.7,
+        project_id: str | None = None,
+        min_score: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        """Document-level hybrid search — deduplicates by document, returns full content."""
+        return self.rpc(
+            "cerefox_search_docs",
+            {
+                "p_query_text": query_text,
+                "p_query_embedding": query_embedding,
+                "p_match_count": match_count,
+                "p_alpha": alpha,
+                "p_project_id": project_id,
+                "p_min_score": min_score,
+            },
+        )
+
     def reconstruct_doc(self, document_id: str) -> dict[str, Any] | None:
         """Reconstruct the full markdown content of a document from its chunks."""
         rows = self.rpc("cerefox_reconstruct_doc", {"p_document_id": document_id})
         return rows[0] if rows else None
+
+    def context_expand(
+        self, chunk_ids: list[str], window_size: int = 1
+    ) -> list[dict[str, Any]]:
+        """Expand chunk IDs to include neighbouring chunks (small-to-big retrieval).
+
+        Returns seed chunks plus up to *window_size* chunks before and after each
+        seed within the same document, ordered by document + chunk_index.
+        The ``is_seed`` field is True for the original result chunks.
+        """
+        return self.rpc(
+            "cerefox_context_expand",
+            {"p_chunk_ids": chunk_ids, "p_window_size": window_size},
+        )
+
+    def save_note(
+        self,
+        title: str,
+        content: str,
+        source: str = "agent",
+        project_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict[str, Any]:
+        """Call cerefox_save_note to quickly capture a document record.
+
+        This is the agent write path.  Content is NOT chunked or embedded
+        server-side — use :class:`~cerefox.ingestion.pipeline.IngestionPipeline`
+        for full ingest with search support.
+        """
+        rows = self.rpc(
+            "cerefox_save_note",
+            {
+                "p_title": title,
+                "p_content": content,
+                "p_source": source,
+                "p_project_id": project_id,
+                "p_metadata": metadata or {},
+            },
+        )
+        if not rows:
+            raise RuntimeError("cerefox_save_note returned no data")
+        return rows[0]

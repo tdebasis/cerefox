@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Ingest — Cerefox{% endblock %}
+
+{% block content %}
+<h1>Ingest Content</h1>
+
+<div id="ingest-result"></div>
+
+<div class="grid" style="grid-template-columns: 1fr 1fr; gap: 2rem;">
+
+  {# ── Paste mode ── #}
+  <article>
+    <header><strong>Paste text</strong></header>
+    <form
+      hx-post="/ingest"
+      hx-target="#ingest-result"
+      hx-swap="innerHTML"
+      hx-indicator="#paste-spinner"
+      enctype="multipart/form-data"
+    >
+      <input type="hidden" name="mode" value="paste">
+      <label>
+        Title <span style="color:var(--pico-del-color);">*</span>
+        <input type="text" name="title" required placeholder="My note title">
+      </label>
+      <label>
+        Project
+        <select name="project_id">
+          <option value="">None</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Content (Markdown)
+        <textarea name="content" rows="10" placeholder="# My Note&#10;&#10;Content here…" required></textarea>
+      </label>
+      <button type="submit">
+        <span id="paste-spinner" class="htmx-indicator">⟳</span> Ingest text
+      </button>
+    </form>
+  </article>
+
+  {# ── File upload mode ── #}
+  <article>
+    <header><strong>Upload file</strong></header>
+    <form
+      hx-post="/ingest"
+      hx-target="#ingest-result"
+      hx-swap="innerHTML"
+      hx-indicator="#file-spinner"
+      enctype="multipart/form-data"
+    >
+      <input type="hidden" name="mode" value="file">
+      <label>
+        Title <small>(optional — uses filename if blank)</small>
+        <input type="text" name="title" placeholder="Optional override title">
+      </label>
+      <label>
+        Project
+        <select name="project_id">
+          <option value="">None</option>
+          {% for p in projects %}
+          <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        Markdown file (.md)
+        <input type="file" name="file" accept=".md,.txt" required>
+      </label>
+      <button type="submit">
+        <span id="file-spinner" class="htmx-indicator">⟳</span> Upload &amp; ingest
+      </button>
+    </form>
+  </article>
+
+</div>
+{% endblock %}

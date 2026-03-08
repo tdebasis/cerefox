@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Cerefox{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+{% if not error %}
+<div class="grid">
+  <article class="stat-card">
+    <div class="stat-number">{{ doc_count }}</div>
+    <div class="stat-label">Documents</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-number">{{ project_count }}</div>
+    <div class="stat-label">Projects</div>
+  </article>
+  <article class="stat-card">
+    <div class="stat-number">
+      <a href="/search" role="button" class="outline" style="font-size:1rem;">Search →</a>
+    </div>
+    <div class="stat-label">Knowledge base</div>
+  </article>
+</div>
+
+<section>
+  <h2>Recent documents</h2>
+  {% if recent_docs %}
+  <figure>
+    <table>
+      <thead>
+        <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Size</th><th>Added</th></tr>
+      </thead>
+      <tbody>
+        {% for doc in recent_docs %}
+        <tr>
+          <td><a href="/document/{{ doc.id }}">{{ doc.title }}</a></td>
+          <td><code>{{ doc.source }}</code></td>
+          <td>{{ doc.chunk_count }}</td>
+          <td>{{ "{:,}".format(doc.total_chars) }} chars</td>
+          <td>{{ doc.created_at[:10] if doc.created_at else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+  {% else %}
+  <div class="empty-state">
+    <p>No documents yet. <a href="/ingest">Ingest your first document</a>.</p>
+  </div>
+  {% endif %}
+</section>
+
+{% if projects %}
+<section>
+  <h2>Projects</h2>
+  <div class="grid">
+    {% for project in projects %}
+    <article>
+      <h3>{{ project.name }}</h3>
+      {% if project.description %}<p>{{ project.description }}</p>{% endif %}
+      <footer>
+        <a href="/search?project_id={{ project.id }}" role="button" class="outline secondary" style="font-size:0.8rem;">Browse</a>
+      </footer>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

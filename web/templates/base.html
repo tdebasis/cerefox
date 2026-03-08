@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Cerefox{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
+  <style>
+    :root { --nav-element-spacing-horizontal: 1rem; }
+    header { border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: 2rem; }
+    .brand { font-weight: 700; font-size: 1.1rem; text-decoration: none; color: inherit; }
+    nav ul li a { color: var(--pico-secondary); }
+    nav ul li a.active, nav ul li a:hover { color: var(--pico-primary); }
+    .score-pill {
+      display: inline-block; padding: 0.1rem 0.4rem; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600; background: var(--pico-primary-background);
+      color: var(--pico-primary); margin-right: 0.5rem;
+    }
+    .breadcrumb { font-size: 0.8rem; color: var(--pico-muted-color); margin-bottom: 0.25rem; }
+    .breadcrumb span + span::before { content: " › "; }
+    .chunk-card { border-left: 3px solid var(--pico-primary-background); padding-left: 1rem; margin-bottom: 1rem; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline; }
+    .stat-card { text-align: center; padding: 1.5rem; }
+    .stat-number { font-size: 2.5rem; font-weight: 700; color: var(--pico-primary); }
+    .stat-label { color: var(--pico-muted-color); font-size: 0.9rem; }
+    .result-item { border: 1px solid var(--pico-muted-border-color); border-radius: var(--pico-border-radius);
+      padding: 1rem; margin-bottom: 0.75rem; }
+    .result-item:hover { border-color: var(--pico-primary-background); }
+    .result-content { font-size: 0.9rem; color: var(--pico-muted-color); white-space: pre-wrap; }
+    .empty-state { text-align: center; padding: 3rem; color: var(--pico-muted-color); }
+    .flash-success { background: var(--pico-form-element-valid-active-border-color);
+      color: white; padding: 0.75rem 1rem; border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
+    .flash-error { background: var(--pico-form-element-invalid-active-border-color);
+      color: white; padding: 0.75rem 1rem; border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="container-fluid">
+    <nav>
+      <ul>
+        <li><a href="/" class="brand">🦊 Cerefox</a></li>
+      </ul>
+      <ul>
+        <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+        <li><a href="/search" class="{% if active == 'search' %}active{% endif %}">Search</a></li>
+        <li><a href="/ingest" class="{% if active == 'ingest' %}active{% endif %}">Ingest</a></li>
+        <li><a href="/projects" class="{% if active == 'projects' %}active{% endif %}">Projects</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% if error %}
+    <div class="flash-error">⚠ {{ error }}</div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="container-fluid" style="margin-top:3rem;padding:1rem 0;border-top:1px solid var(--pico-muted-border-color);color:var(--pico-muted-color);font-size:0.8rem;">
+    Cerefox — personal knowledge base
+  </footer>
+</body>
+</html>

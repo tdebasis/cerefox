@@ -1,0 +1,70 @@
+version: "3.9"
+
+# ── Cerefox local stack ────────────────────────────────────────────────────────
+# Runs Postgres+pgvector locally.  For cloud deployment (Supabase), only the
+# `cerefox` service is needed — point it at your Supabase credentials.
+#
+# Usage:
+#   docker compose up -d              # start everything
+#   docker compose up -d postgres     # start only the database
+#   docker compose logs -f cerefox   # watch the web UI logs
+
+services:
+
+  # ── Postgres with pgvector ─────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: cerefox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cerefox
+      POSTGRES_PASSWORD: cerefox
+      POSTGRES_DB: cerefox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerefox -d cerefox"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Cerefox web UI ─────────────────────────────────────────────────────────
+  cerefox:
+    build: .
+    container_name: cerefox-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Supabase API credentials (required for MCP agent access).
+      # Leave blank to use the local Postgres directly via DATABASE_URL.
+      CEREFOX_SUPABASE_URL: ${CEREFOX_SUPABASE_URL:-}
+      CEREFOX_SUPABASE_KEY: ${CEREFOX_SUPABASE_KEY:-}
+
+      # Direct Postgres URL — used by db_deploy.py.
+      CEREFOX_DATABASE_URL: postgresql://cerefox:cerefox@postgres:5432/cerefox
+
+      # Embedding model (mpnet downloads ~420 MB on first use).
+      CEREFOX_EMBEDDER: ${CEREFOX_EMBEDDER:-mpnet}
+      CEREFOX_OLLAMA_URL: ${CEREFOX_OLLAMA_URL:-http://host.docker.internal:11434}
+
+      # Chunking and retrieval settings.
+      CEREFOX_MAX_CHUNK_CHARS: ${CEREFOX_MAX_CHUNK_CHARS:-4000}
+      CEREFOX_MAX_RESPONSE_BYTES: ${CEREFOX_MAX_RESPONSE_BYTES:-65000}
+
+      # Backup directory (mounted as a volume below).
+      CEREFOX_BACKUP_DIR: /data/backups
+    volumes:
+      - cerefox_data:/data
+      # Cache the embedding model between restarts.
+      - model_cache:/root/.cache/huggingface
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
+  cerefox_data:
+  model_cache:

@@ -1,0 +1,13 @@
+{% if success %}
+<div class="flash-success">
+  ✓ Ingested <strong>"{{ title }}"</strong> successfully.
+</div>
+{% elif skipped %}
+<div style="background:var(--pico-secondary-background);color:var(--pico-secondary);padding:0.75rem 1rem;border-radius:var(--pico-border-radius);margin-bottom:1rem;">
+  ↩ Skipped <strong>"{{ title }}"</strong> — already in the knowledge base (same content).
+</div>
+{% elif error %}
+<div class="flash-error">
+  ⚠ {{ error }}
+</div>
+{% endif %}

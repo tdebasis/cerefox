@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ doc.doc_title if doc else "Document" }} — Cerefox{% endblock %}
+
+{% block content %}
+{% if doc %}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="/">Dashboard</a></li>
+    <li><a href="/search">Search</a></li>
+    <li>{{ doc.doc_title }}</li>
+  </ul>
+</nav>
+
+<hgroup>
+  <h1>{{ doc.doc_title }}</h1>
+  <p>
+    Source: <code>{{ doc.doc_source }}</code> ·
+    {{ doc.chunk_count }} chunk(s) ·
+    {{ "{:,}".format(doc.total_chars) }} chars
+  </p>
+</hgroup>
+
+<details>
+  <summary>Metadata</summary>
+  <pre><code>{{ doc.doc_metadata | tojson(indent=2) }}</code></pre>
+</details>
+
+<h2>Chunks</h2>
+{% for chunk in chunks %}
+<div class="chunk-card">
+  <div class="breadcrumb">
+    {% for part in chunk.heading_path %}
+    <span>{{ part }}</span>
+    {% endfor %}
+    {% if not chunk.heading_path %}
+    <span style="color:var(--pico-muted-color);">(preamble)</span>
+    {% endif %}
+  </div>
+  <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.5;margin:0.5rem 0 0;">{{ chunk.content }}</pre>
+</div>
+{% else %}
+<div class="empty-state">
+  <p>This document has no chunks. Run <code>cerefox ingest</code> to index it.</p>
+</div>
+{% endfor %}
+
+{% if doc.full_content %}
+<h2>Full content</h2>
+<article>
+  <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.6;">{{ doc.full_content }}</pre>
+</article>
+{% endif %}
+
+{% else %}
+<div class="empty-state">
+  <h2>Document not found</h2>
+  <p><a href="/search">← Back to search</a></p>
+</div>
+{% endif %}
+{% endblock %}

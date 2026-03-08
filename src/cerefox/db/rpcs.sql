@@ -24,7 +24,8 @@ CREATE OR REPLACE FUNCTION cerefox_hybrid_search(
     p_match_count     INT     DEFAULT 10,
     p_alpha           FLOAT   DEFAULT 0.7,
     p_use_upgrade     BOOLEAN DEFAULT FALSE,
-    p_project_id      UUID    DEFAULT NULL
+    p_project_id      UUID    DEFAULT NULL,
+    p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
     chunk_id      UUID,
@@ -85,7 +86,14 @@ BEGIN
                 COALESCE(f.id, v.id) AS id,
                 (   p_alpha * COALESCE(v.vec_score, 0.0) +
                     (1.0 - p_alpha) * COALESCE(f.fts_score, 0.0)
-                ) AS score
+                ) AS score,
+                COALESCE(v.vec_score, 0.0) AS vec_score,
+                -- TRUE when the chunk matched the @@ FTS operator.
+                -- We use this flag rather than vec_score to decide whether a chunk
+                -- passes the threshold, because in small corpora every chunk appears
+                -- in vec_results (LIMIT candidate_count covers all rows), so
+                -- vec_score is never NULL even for FTS-only matches.
+                f.id IS NOT NULL AS has_fts_match
             FROM fts_results f
             FULL OUTER JOIN vec_results v ON f.id = v.id
         )
@@ -105,6 +113,10 @@ BEGIN
     FROM combined cm
     JOIN cerefox_chunks   c ON c.id = cm.id
     JOIN cerefox_documents d ON c.document_id = d.id
+    -- FTS matches pass through unconditionally: the @@ operator is a hard gate
+    -- and guarantees the query terms appear in the chunk.
+    -- Vector-only results (no FTS match) are filtered by the cosine threshold.
+    WHERE cm.has_fts_match OR cm.vec_score >= p_min_score
     ORDER BY cm.score DESC
     LIMIT p_match_count;
 END;
@@ -253,4 +265,220 @@ AS $$
     JOIN cerefox_chunks c ON c.document_id = d.id
     WHERE d.id = p_document_id
     GROUP BY d.id, d.title, d.source, d.metadata;
+$$;
+
+-- ── cerefox_save_note ─────────────────────────────────────────────────────────
+-- Agent write tool: create a minimal document record for a short text note.
+-- Embedding and chunking are NOT done server-side in V1 — the Python ingestion
+-- pipeline should be used for full ingest.  This RPC is intended for quick
+-- one-shot note capture from AI agents that want to store something immediately.
+--
+-- Parameters:
+--   p_title       : Note title (required)
+--   p_content     : Markdown content (required)
+--   p_source      : Origin label, e.g. 'agent' (default: 'agent')
+--   p_project_id  : Optional project UUID
+--   p_metadata    : Optional JSONB metadata (e.g. agent name, session id)
+--
+-- Returns: the created document row (id, title, created_at)
+
+CREATE OR REPLACE FUNCTION cerefox_save_note(
+    p_title       TEXT,
+    p_content     TEXT,
+    p_source      TEXT    DEFAULT 'agent',
+    p_project_id  UUID    DEFAULT NULL,
+    p_metadata    JSONB   DEFAULT '{}'::JSONB
+)
+RETURNS TABLE (
+    id          UUID,
+    title       TEXT,
+    created_at  TIMESTAMPTZ
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_hash TEXT;
+    v_doc  cerefox_documents%ROWTYPE;
+BEGIN
+    -- Compute content hash to support deduplication on the caller side.
+    v_hash := encode(sha256(p_content::BYTEA), 'hex');
+
+    INSERT INTO cerefox_documents (
+        title, source, content_hash, project_id, metadata,
+        chunk_count, total_chars
+    ) VALUES (
+        p_title, p_source, v_hash, p_project_id, p_metadata,
+        0, length(p_content)
+    )
+    RETURNING * INTO v_doc;
+
+    RETURN QUERY SELECT v_doc.id, v_doc.title, v_doc.created_at;
+END;
+$$;
+
+-- ── cerefox_search_docs ───────────────────────────────────────────────────────
+-- Document-level hybrid search: runs hybrid search internally, deduplicates
+-- results by document (keeping the best-scoring chunk per document), and
+-- returns up to p_match_count *distinct documents* with their full content.
+--
+-- Use this when you want complete notes rather than isolated snippets.
+-- Best for AI agents querying a personal knowledge base where notes are
+-- small-to-medium sized and full context is more valuable than precision.
+--
+-- Parameters:
+--   p_query_text      : Query string (used for FTS)
+--   p_query_embedding : 768-dim query embedding (used for vector search)
+--   p_match_count     : Max documents to return (default: 5)
+--   p_alpha           : Semantic weight 0.0–1.0 (default: 0.7)
+--   p_project_id      : Optional project filter
+--   p_min_score       : Minimum cosine similarity for vector results (default 0.0 here;
+--                       the Python layer applies CEREFOX_MIN_SEARCH_SCORE, default 0.65).
+--                       If calling this RPC directly (e.g. from an agent), set this
+--                       explicitly — 0.0 disables filtering and returns everything.
+--
+-- Returns one row per document with full reconstructed content.
+
+CREATE OR REPLACE FUNCTION cerefox_search_docs(
+    p_query_text      TEXT,
+    p_query_embedding VECTOR(768),
+    p_match_count     INT   DEFAULT 5,
+    p_alpha           FLOAT DEFAULT 0.7,
+    p_project_id      UUID  DEFAULT NULL,
+    p_min_score       FLOAT DEFAULT 0.0
+)
+RETURNS TABLE (
+    document_id             UUID,
+    doc_title               TEXT,
+    doc_source              TEXT,
+    doc_metadata            JSONB,
+    best_score              FLOAT,
+    best_chunk_heading_path TEXT[],
+    full_content            TEXT,
+    chunk_count             INT,
+    total_chars             INT
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+    WITH chunk_results AS (
+        -- Run hybrid search with a 10x candidate pool so deduplication has
+        -- enough candidates to fill p_match_count unique documents.
+        -- Personal knowledge bases have many chunks per document, so a 10x
+        -- multiplier reliably surfaces p_match_count distinct documents.
+        -- Trade-off: very large corpora (10 000+ chunks) may benefit from a
+        -- wider pool, but 10x is the right default here.
+        SELECT * FROM cerefox_hybrid_search(
+            p_query_text      := p_query_text,
+            p_query_embedding := p_query_embedding,
+            p_match_count     := p_match_count * 10,
+            p_alpha           := p_alpha,
+            p_use_upgrade     := FALSE,
+            p_project_id      := p_project_id,
+            p_min_score       := p_min_score
+        )
+    ),
+    best_per_doc AS (
+        -- One row per document: keep the highest-scoring chunk as representative.
+        SELECT DISTINCT ON (document_id)
+            document_id,
+            heading_path  AS best_chunk_heading_path,
+            score         AS best_score,
+            doc_title,
+            doc_source,
+            doc_metadata
+        FROM chunk_results
+        ORDER BY document_id, score DESC
+    ),
+    top_docs AS (
+        -- Rank documents by their best chunk score, then take top N.
+        SELECT *
+        FROM best_per_doc
+        ORDER BY best_score DESC
+        LIMIT p_match_count
+    ),
+    full_docs AS (
+        -- Reconstruct full content for each top document from its chunks.
+        SELECT
+            c.document_id,
+            STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
+            COUNT(*)::INT                                          AS chunk_count,
+            SUM(c.char_count)::INT                                 AS total_chars
+        FROM cerefox_chunks c
+        WHERE c.document_id IN (SELECT document_id FROM top_docs)
+        GROUP BY c.document_id
+    )
+    SELECT
+        td.document_id,
+        td.doc_title,
+        td.doc_source,
+        td.doc_metadata,
+        td.best_score,
+        td.best_chunk_heading_path,
+        fd.full_content,
+        fd.chunk_count,
+        fd.total_chars
+    FROM top_docs td
+    JOIN full_docs fd ON fd.document_id = td.document_id
+    ORDER BY td.best_score DESC;
+$$;
+
+-- ── cerefox_context_expand ────────────────────────────────────────────────────
+-- Small-to-big retrieval: given a set of chunk IDs from a search result,
+-- return those chunks plus their immediate neighbours (±window_size by
+-- chunk_index within the same document).  Use this after a chunk-level search
+-- to recover more surrounding context without fetching the full document.
+--
+-- Parameters:
+--   p_chunk_ids   : Array of chunk UUIDs from the search results
+--   p_window_size : Number of chunks to expand in each direction (default: 1)
+--
+-- Returns each expanded chunk with is_seed=TRUE for original results.
+
+CREATE OR REPLACE FUNCTION cerefox_context_expand(
+    p_chunk_ids   UUID[],
+    p_window_size INT DEFAULT 1
+)
+RETURNS TABLE (
+    chunk_id      UUID,
+    document_id   UUID,
+    chunk_index   INT,
+    title         TEXT,
+    content       TEXT,
+    heading_path  TEXT[],
+    heading_level INT,
+    doc_title     TEXT,
+    is_seed       BOOL
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+    WITH seeds AS (
+        SELECT c.id, c.document_id, c.chunk_index
+        FROM cerefox_chunks c
+        WHERE c.id = ANY(p_chunk_ids)
+    ),
+    expanded AS (
+        SELECT DISTINCT c.id
+        FROM cerefox_chunks c
+        JOIN seeds s ON c.document_id = s.document_id
+        WHERE c.chunk_index BETWEEN s.chunk_index - p_window_size
+                                AND s.chunk_index + p_window_size
+    )
+    SELECT
+        c.id            AS chunk_id,
+        c.document_id,
+        c.chunk_index,
+        c.title,
+        c.content,
+        c.heading_path,
+        c.heading_level,
+        d.title         AS doc_title,
+        c.id = ANY(p_chunk_ids) AS is_seed
+    FROM expanded e
+    JOIN cerefox_chunks   c ON c.id = e.id
+    JOIN cerefox_documents d ON c.document_id = d.id
+    ORDER BY c.document_id, c.chunk_index;
 $$;
