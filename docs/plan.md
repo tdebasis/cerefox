@@ -5,23 +5,23 @@
 
 ---
 
-## Phase 1: Foundation — Project Setup & Database
+## Phase 1: Foundation — Project Setup & Database ✓
 
 **Goal**: Runnable Python project with database schema deployed to Supabase.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1.1 | Initialize Python project (pyproject.toml, uv, ruff config) | Not Started | |
-| 1.2 | Create project directory structure (src/cerefox/*) | Not Started | |
-| 1.3 | Write config module (pydantic-settings, .env support) | Not Started | |
-| 1.4 | Write database schema SQL (documents, chunks, projects tables) | Not Started | |
-| 1.5 | Write search RPC SQL (hybrid, FTS, semantic, reconstruct) | Not Started | |
-| 1.6 | Create DB client wrapper (Supabase Python client) | Not Started | |
-| 1.7 | Write `scripts/db_deploy.py` — apply full schema to a fresh instance | Not Started | |
-| 1.8 | Write `scripts/db_status.py` — verify schema and report table stats | Not Started | |
-| 1.9 | Deploy schema to Supabase using db_deploy.py | Not Started | |
-| 1.10 | Write tests for config module and DB client (unit, mocked) | Not Started | |
-| 1.11 | Write `docs/guides/setup-supabase.md` and `docs/guides/configuration.md` | Not Started | |
+| 1.1 | Initialize Python project (pyproject.toml, uv, ruff config) | Done | uv project, ruff at line-length 100 |
+| 1.2 | Create project directory structure (src/cerefox/*) | Done | Matches CLAUDE.md tree |
+| 1.3 | Write config module (pydantic-settings, .env support) | Done | `src/cerefox/config.py`, CEREFOX_ prefix |
+| 1.4 | Write database schema SQL (documents, chunks, projects tables) | Done | `src/cerefox/db/schema.sql` — HNSW, FTS GENERATED col |
+| 1.5 | Write search RPC SQL (hybrid, FTS, semantic, reconstruct) | Done | `src/cerefox/db/rpcs.sql` — all SECURITY DEFINER |
+| 1.6 | Create DB client wrapper (Supabase Python client) | Done | `src/cerefox/db/client.py` — lazy init, typed methods |
+| 1.7 | Write `scripts/db_deploy.py` — apply full schema to a fresh instance | Done | psycopg2, `--dry-run`, `--reset` flags |
+| 1.8 | Write `scripts/db_status.py` — verify schema and report table stats | Done | Checks extensions, tables, functions, indexes, row counts |
+| 1.9 | Deploy schema to Supabase using db_deploy.py | Pending | Requires real credentials — user action needed |
+| 1.10 | Write tests for config module and DB client (unit, mocked) | Done | 40 tests pass — `tests/test_config.py`, `tests/test_db_client.py` |
+| 1.11 | Write `docs/guides/setup-supabase.md` and `docs/guides/configuration.md` | Done | Step-by-step setup guide + full config reference |
 
 **Deliverable**: Schema running on Supabase, Python project builds and imports, deploy script and Supabase setup guide complete.
 
@@ -149,9 +149,10 @@ Record completed milestones here as we go.
 | Date | Milestone | Notes |
 |------|-----------|-------|
 | 2026-03-07 | Project kickoff | Created CLAUDE.md, solution design, plan, TODO, requirements |
+| 2026-03-07 | Phase 1 complete | Python project, full schema SQL, search RPCs, DB client, deploy/status scripts, 40 unit tests passing, Supabase setup guide and config reference written |
 
 ---
 
 ## Current Focus
 
-**Next up**: Phase 1 — Foundation (project setup and database schema)
+**Next up**: Phase 2 — Chunking & Embeddings
