@@ -1,0 +1,270 @@
+# Cerefox: Requirements & Specifications
+
+> **Source of truth** for what Cerefox does and how it behaves.
+> Updated as requirements evolve. See `solution-design.md` for architecture
+> and `plan.md` for implementation status.
+
+---
+
+## 1. Product Overview
+
+Cerefox is a **personal second brain** — a knowledge base where a single user stores thoughts, notes, ideas, plans, and knowledge across multiple life domains. It is designed to be:
+
+- **Owned**: all data lives in infrastructure the user controls (Supabase or self-hosted Postgres)
+- **Agent-accessible**: any AI agent (Claude, ChatGPT, Cursor, custom agents, OpenClaw) can search and retrieve from Cerefox via MCP
+- **Cheap**: operates on Supabase free tier or local Docker with zero ongoing cost
+- **Open source**: MIT license, designed for personal use but shareable
+
+### 1.1 Content Domains
+
+The knowledge base supports organizing content into projects/categories. These are entirely user-defined — Cerefox ships with no hard-coded categories. The following are illustrative examples of the kinds of projects a user might create:
+
+- **Creative Projects**: worldbuilding, fiction, publications, community content
+- **Work**: professional ideas, technical notes, meeting summaries
+- **Research**: topics under active investigation (AI, domain knowledge, etc.)
+- **Side Projects**: ideas and projects to pick up later
+- **Personal**: general thoughts, brainstorming, analysis, journaling
+
+Projects and categories are created, renamed, and deleted by the user at any time through the web UI or CLI. There is no predefined taxonomy.
+
+---
+
+## 2. Functional Requirements
+
+### FR-1: Content Ingestion
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-1.1 | Ingest Markdown files (.md) | P0 |
+| FR-1.2 | Ingest pasted text (treated as markdown) | P0 |
+| FR-1.3 | Convert PDF to markdown before ingestion | P1 |
+| FR-1.4 | Convert DOCX to markdown before ingestion | P1 |
+| FR-1.5 | Deduplicate content by hash (skip re-ingestion of identical files) | P0 |
+| FR-1.6 | Associate ingested content with a project | P0 |
+| FR-1.7 | Attach metadata (tags, importance, custom fields) on ingest | P0 |
+| FR-1.8 | Batch ingest (directory of files) | P1 |
+| FR-1.9 | Ingestion is fire-and-forget (async, non-blocking) | P0 |
+| FR-1.10 | Report ingestion failures via UI event/log | P0 |
+
+### FR-2: Content Chunking
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-2.1 | Split markdown at H1 heading boundaries | P0 |
+| FR-2.2 | Within H1 sections, split at H2 boundaries | P0 |
+| FR-2.3 | Fall back to H3 splitting if chunks exceed max size | P0 |
+| FR-2.4 | Fall back to paragraph splitting with overlap if still too large | P1 |
+| FR-2.5 | Preserve heading hierarchy path for each chunk | P0 |
+| FR-2.6 | Merge very small chunks upward (below minimum size) | P1 |
+| FR-2.7 | Maintain chunk ordering (chunk_index) for document reconstruction | P0 |
+
+### FR-3: Embeddings
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-3.1 | Compute primary embeddings using a local model (no API cost) | P0 |
+| FR-3.2 | Support pluggable embedder interface | P0 |
+| FR-3.3 | Default embedder: all-mpnet-base-v2 (768-dim) | P0 |
+| FR-3.4 | Support Ollama-hosted models as alternative embedders | P0 |
+| FR-3.5 | Support optional "upgrade" embedding field per chunk | P1 |
+| FR-3.6 | Track which embedder produced each embedding | P0 |
+| FR-3.7 | Standardize on 768-dim vectors | P0 |
+| FR-3.8 | Support Vertex AI / OpenAI embedders (future, parameterized) | P2 |
+
+### FR-4: Search & Retrieval
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-4.1 | Hybrid search: combine FTS and vector similarity | P0 |
+| FR-4.2 | FTS-only search (keyword, exact match) | P0 |
+| FR-4.3 | Semantic-only search (conceptual similarity) | P0 |
+| FR-4.4 | Configurable semantic weight (alpha) for hybrid search | P0 |
+| FR-4.5 | Document reconstruction from chunks | P0 |
+| FR-4.6 | Response size limit (parameterized, default 65000 bytes) | P0 |
+| FR-4.7 | Small-to-big context expansion (return sibling chunks) | P1 |
+| FR-4.8 | Truncation metadata (indicate when results are cut off) | P1 |
+| FR-4.9 | Filter search by project/tags/metadata | P1 |
+
+### FR-5: MCP Integration
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-5.1 | Expose search functions as Supabase MCP tools | P0 |
+| FR-5.2 | Expose document reconstruction as MCP tool | P0 |
+| FR-5.3 | Agents can query without needing to compute embeddings | P2 |
+| FR-5.4 | Custom MCP server for enhanced capabilities | P2 |
+
+### FR-6: Web Application
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-6.1 | Dashboard with document counts and recent activity | P1 |
+| FR-6.2 | Knowledge browser: search, filter, navigate stored content | P1 |
+| FR-6.3 | Document viewer: view full document with chunk boundaries | P1 |
+| FR-6.4 | Ingest interface: upload files or paste content | P1 |
+| FR-6.5 | Project management: create, edit, delete projects | P1 |
+| FR-6.6 | Metadata management: view and edit metadata on documents | P1 |
+| FR-6.7 | Ingestion status panel: track async jobs, view errors | P1 |
+
+### FR-7: CLI
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-7.1 | `cerefox ingest <file>` — ingest a markdown file | P0 |
+| FR-7.2 | `cerefox search <query>` — search the knowledge base | P0 |
+| FR-7.3 | `cerefox list` — list documents | P0 |
+| FR-7.4 | `cerefox delete <id>` — delete a document and its chunks | P0 |
+| FR-7.5 | `cerefox projects` — list/manage projects | P1 |
+
+### FR-8: Backup & Export
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-8.1 | File system backup of raw markdown on ingest (local) | P0 |
+| FR-8.2 | Full knowledge base backup: export all documents + metadata as markdown files | P0 |
+| FR-8.3 | Restore from a file system backup (re-ingest all exported markdown files) | P0 |
+| FR-8.4 | Optional git repository backup with per-ingest commits | P2 |
+| FR-8.5 | Cloud storage backup (GCS/Firebase) for cloud deployments | P2 |
+
+### FR-9: Deployment & Operations Scripts
+
+Scripts that a developer or operator can run to set up, update, and maintain the storage system. These live in `scripts/` and are documented in the setup guide.
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-9.1 | `scripts/db_deploy.py` — apply full schema (tables, indexes, RPCs) to a fresh Supabase/Postgres instance | P0 |
+| FR-9.2 | `scripts/db_migrate.py` — apply incremental schema migrations (idempotent) | P0 |
+| FR-9.3 | `scripts/db_status.py` — verify schema version, check extensions, report table stats | P0 |
+| FR-9.4 | `scripts/backup_create.py` — export all documents and chunks to local markdown files | P0 |
+| FR-9.5 | `scripts/backup_restore.py` — re-ingest a backup directory into a fresh database | P0 |
+| FR-9.6 | All scripts accept `--dry-run` flag for safe verification before applying changes | P1 |
+| FR-9.7 | All scripts print a clear summary of what was done / what would be done | P0 |
+
+---
+
+## 3. Non-Functional Requirements
+
+### NFR-1: Cost
+
+| ID | Requirement |
+|----|-------------|
+| NFR-1.1 | Operate at zero cost on Supabase free tier + local embeddings |
+| NFR-1.2 | No mandatory paid API calls for core functionality |
+| NFR-1.3 | Paid embedders/services are optional upgrades, never required |
+
+### NFR-2: Performance
+
+| ID | Requirement |
+|----|-------------|
+| NFR-2.1 | Search responses return within 2 seconds for typical queries |
+| NFR-2.2 | Ingestion latency is acceptable (seconds to minutes) — async, not user-facing |
+| NFR-2.3 | Support at least 10,000 documents / 100,000 chunks on free tier |
+
+### NFR-3: Data Ownership
+
+| ID | Requirement |
+|----|-------------|
+| NFR-3.1 | All data stored in user-controlled infrastructure |
+| NFR-3.2 | No vendor lock-in — can migrate from Supabase to self-hosted Postgres |
+| NFR-3.3 | Data is exportable in standard formats (markdown) |
+| NFR-3.4 | No telemetry or data collection by Cerefox itself |
+
+### NFR-4: Extensibility
+
+| ID | Requirement |
+|----|-------------|
+| NFR-4.1 | Embedders are pluggable (implement protocol, register) |
+| NFR-4.2 | Metadata schema is evolvable (JSONB, no rigid columns) |
+| NFR-4.3 | Projects/categories are user-defined and manageable at runtime |
+| NFR-4.4 | Content converters are pluggable (add new formats without core changes) |
+
+### NFR-5: Simplicity
+
+| ID | Requirement |
+|----|-------------|
+| NFR-5.1 | Single-user system (no auth complexity in V1) |
+| NFR-5.2 | Minimal dependencies — prefer standard library when possible |
+| NFR-5.3 | Web UI has no JavaScript build step (Jinja2 + HTMX) |
+| NFR-5.4 | Docker Compose for full local deployment |
+
+### NFR-6: Test Coverage
+
+| ID | Requirement |
+|----|-------------|
+| NFR-6.1 | Every code module has a corresponding test module |
+| NFR-6.2 | Tests are written alongside code, not deferred |
+| NFR-6.3 | Unit tests mock all external dependencies (DB, embedding APIs) |
+| NFR-6.4 | Integration tests are clearly marked and skipped by default |
+| NFR-6.5 | Tests cover: happy path, edge cases, and known error conditions |
+| NFR-6.6 | CI runs the unit test suite on every commit |
+
+---
+
+## 4. Technical Specifications
+
+### 4.1 Database
+
+- **Engine**: PostgreSQL 16+ with `pgvector` and `uuid-ossp` extensions
+- **Hosting**: Supabase (primary) or local Docker
+- **Vector dimensions**: 768 (fixed)
+- **FTS config**: English (`to_tsvector('english', ...)`)
+- **Index types**: GIN for FTS, HNSW for vectors, GIN for JSONB metadata
+
+### 4.2 Embeddings
+
+- **Default**: `sentence-transformers/all-mpnet-base-v2` (768-dim, local)
+- **Alternatives**: Ollama models (nomic-embed-text, mxbai-embed-large)
+- **Future**: Vertex AI, OpenAI (parameterized, opt-in)
+- **Normalization**: all embeddings are L2-normalized before storage
+- **Distance metric**: cosine similarity (via `<=>` operator)
+
+### 4.3 Chunking
+
+- **Input**: Markdown text
+- **Strategy**: heading-based (H1 > H2 > H3 > paragraph fallback)
+- **Max chunk size**: 4000 characters (configurable)
+- **Min chunk size**: 100 characters (merge upward if smaller)
+- **Paragraph overlap**: 200 characters (when paragraph splitting is needed)
+
+### 4.4 API & MCP
+
+- **Supabase MCP endpoint**: `https://mcp.supabase.com/<project-ref>`
+- **Response size limit**: 65000 bytes (parameterized via `CEREFOX_MAX_RESPONSE_BYTES`)
+- **RPC naming**: all prefixed with `cerefox_`
+
+### 4.5 Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Language | Python 3.11+ |
+| Package management | uv |
+| Web framework | FastAPI |
+| Templating | Jinja2 |
+| Frontend interactivity | HTMX |
+| CLI | Click |
+| Database client | supabase-py |
+| Embeddings | sentence-transformers, ollama-python |
+| Testing | pytest |
+| Linting | ruff |
+| Containerization | Docker |
+| License | MIT |
+
+---
+
+## 5. Configuration Parameters
+
+All parameters use `CEREFOX_` prefix and can be set via environment variables or `.env` file.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `CEREFOX_SUPABASE_URL` | — | Supabase project URL |
+| `CEREFOX_SUPABASE_KEY` | — | Supabase service role key |
+| `CEREFOX_EMBEDDER` | `mpnet` | Default embedder: `mpnet`, `ollama`, `vertex` |
+| `CEREFOX_OLLAMA_URL` | `http://localhost:11434` | Ollama server URL |
+| `CEREFOX_OLLAMA_MODEL` | `nomic-embed-text` | Ollama model for embeddings |
+| `CEREFOX_MAX_RESPONSE_BYTES` | `65000` | Max response size for MCP/search |
+| `CEREFOX_MAX_CHUNK_CHARS` | `4000` | Max characters per chunk |
+| `CEREFOX_MIN_CHUNK_CHARS` | `100` | Min characters per chunk |
+| `CEREFOX_BACKUP_DIR` | `./backups` | Directory for file system backups |
+| `CEREFOX_VECTOR_DIMENSIONS` | `768` | Embedding vector dimensions |
+| `CEREFOX_LOG_LEVEL` | `INFO` | Logging level |
