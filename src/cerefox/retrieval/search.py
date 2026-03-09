@@ -175,7 +175,14 @@ class SearchClient:
         match_count: int = 10,
         project_id: str | None = None,
     ) -> SearchResponse:
-        """Pure full-text keyword search."""
+        """Pure full-text keyword search.
+
+        Note: min_search_score is intentionally NOT applied here.  FTS scores
+        (ts_rank_cd) are on a different scale from cosine similarity and cannot
+        be meaningfully compared against the same threshold.  The @@ operator
+        already acts as a hard gate — results that match a keyword query are
+        always relevant enough to return.
+        """
         rows = self._client.fts_search(
             query_text=query,
             match_count=match_count,
@@ -313,7 +320,7 @@ class SearchClient:
             total_found=total_found,
             response_bytes=used_bytes,
             truncated=truncated,
-            metadata={"max_bytes": max_bytes, "alpha": None},
+            metadata={"max_bytes": max_bytes},
         )
 
 

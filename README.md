@@ -1,4 +1,8 @@
-# 🦊 Cerefox
+<p align="center">
+  <img src="web/static/cerefox_logo.jpg" alt="Cerefox" width="160">
+</p>
+
+# Cerefox
 
 **Personal second-brain knowledge base** — store your notes, thoughts, and documents in Postgres with pgvector and query them from any AI agent via MCP.
 

@@ -180,7 +180,8 @@ CREATE OR REPLACE FUNCTION cerefox_semantic_search(
     p_query_embedding VECTOR(768),
     p_match_count     INT     DEFAULT 10,
     p_use_upgrade     BOOLEAN DEFAULT FALSE,
-    p_project_id      UUID    DEFAULT NULL
+    p_project_id      UUID    DEFAULT NULL,
+    p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
     chunk_id      UUID,
@@ -223,6 +224,15 @@ BEGIN
     JOIN cerefox_documents d ON c.document_id = d.id
     WHERE (p_project_id IS NULL OR d.project_id = p_project_id)
       AND (p_use_upgrade = FALSE OR c.embedding_upgrade IS NOT NULL)
+      -- Optional minimum cosine similarity threshold.
+      -- Default 0.0 means no filtering (returns all top-N results).
+      -- When called via the Python layer, CEREFOX_MIN_SEARCH_SCORE (default 0.65)
+      -- is applied client-side; agents calling this RPC directly can pass p_min_score.
+      AND CASE
+              WHEN p_use_upgrade AND c.embedding_upgrade IS NOT NULL
+                  THEN (1.0 - (c.embedding_upgrade <=> p_query_embedding))::FLOAT
+              ELSE (1.0 - (c.embedding_primary <=> p_query_embedding))::FLOAT
+          END >= p_min_score
     ORDER BY
         CASE
             WHEN p_use_upgrade AND c.embedding_upgrade IS NOT NULL

@@ -172,6 +172,7 @@ All RPCs are in `src/cerefox/db/rpcs.sql`.  Every search RPC returns:
 | `p_match_count` | INT | 10 | Results to return |
 | `p_use_upgrade` | BOOL | false | Use upgrade embedding |
 | `p_project_id` | UUID | null | Filter by project |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity. All results are filtered by this threshold. When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
 
 ### `cerefox_reconstruct_doc`
 

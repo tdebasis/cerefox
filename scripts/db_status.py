@@ -31,6 +31,9 @@ _EXPECTED_FUNCTIONS = [
     "cerefox_fts_search",
     "cerefox_semantic_search",
     "cerefox_reconstruct_doc",
+    "cerefox_save_note",
+    "cerefox_search_docs",
+    "cerefox_context_expand",
 ]
 
 _EXPECTED_EXTENSIONS = ["uuid-ossp", "vector"]
@@ -38,9 +41,11 @@ _EXPECTED_EXTENSIONS = ["uuid-ossp", "vector"]
 _EXPECTED_INDEXES = [
     "idx_cerefox_chunks_fts",
     "idx_cerefox_chunks_emb_primary",
+    "idx_cerefox_chunks_emb_upgrade",
     "idx_cerefox_chunks_document",
     "idx_cerefox_docs_metadata",
     "idx_cerefox_docs_project",
+    "idx_cerefox_docs_hash",
 ]
 
 

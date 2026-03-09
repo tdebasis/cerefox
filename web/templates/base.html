@@ -4,12 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Cerefox{% endblock %}</title>
+  <link rel="icon" type="image/jpeg" href="/static/cerefox_logo.jpg">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
   <script src="https://unpkg.com/htmx.org@1.9.12" crossorigin="anonymous"></script>
   <style>
     :root { --nav-element-spacing-horizontal: 1rem; }
     header { border-bottom: 1px solid var(--pico-muted-border-color); margin-bottom: 2rem; }
-    .brand { font-weight: 700; font-size: 1.1rem; text-decoration: none; color: inherit; }
+    .brand { font-weight: 700; font-size: 1.1rem; text-decoration: none; color: inherit; display: flex; align-items: center; gap: 0.45rem; }
+    .brand img { height: 1.6rem; width: auto; border-radius: 4px; }
     nav ul li a { color: var(--pico-secondary); }
     nav ul li a.active, nav ul li a:hover { color: var(--pico-primary); }
     .score-pill {
@@ -41,7 +43,7 @@
   <header class="container-fluid">
     <nav>
       <ul>
-        <li><a href="/" class="brand">🦊 Cerefox</a></li>
+        <li><a href="/" class="brand"><img src="/static/cerefox_logo.jpg" alt="Cerefox logo"> Cerefox</a></li>
       </ul>
       <ul>
         <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>

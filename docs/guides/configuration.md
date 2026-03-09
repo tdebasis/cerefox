@@ -18,8 +18,8 @@ cp .env.example .env
 | `CEREFOX_DATABASE_URL` | `""` | For scripts | Direct Postgres connection URL. Found in: Project Settings → Database → Connection string (URI). Required for `db_deploy.py` and `db_status.py`. |
 
 **When each is needed:**
-- `SUPABASE_URL` + `SUPABASE_KEY` — used by the Python app (ingestion, search, CLI, web UI) via supabase-py
-- `DATABASE_URL` — used only by the deployment scripts (psycopg2 direct connection)
+- `CEREFOX_SUPABASE_URL` + `CEREFOX_SUPABASE_KEY` — used by the Python app (ingestion, search, CLI, web UI) via supabase-py
+- `CEREFOX_DATABASE_URL` — used only by the deployment scripts (psycopg2 direct connection)
 
 ---
 
@@ -52,12 +52,13 @@ cp .env.example .env
 |----------|---------|-------------|
 | `CEREFOX_MAX_CHUNK_CHARS` | `4000` | Maximum characters per chunk before splitting falls back to next heading level or paragraph |
 | `CEREFOX_MIN_CHUNK_CHARS` | `100` | Minimum chunk size. Chunks smaller than this are merged into the previous chunk |
-| `CEREFOX_OVERLAP_CHARS` | `200` | Character overlap when splitting at paragraph level (preserves context at boundaries) |
+| `CEREFOX_OVERLAP_CHARS` | `200` | Character overlap added at paragraph-level splits (preserves context at boundaries). Not applied at heading boundaries — heading splits are clean. |
 
 **Tuning advice:**
 - Smaller `MAX_CHUNK_CHARS` → more precise chunk retrieval, but more DB rows and more embedding calls
 - Larger `MAX_CHUNK_CHARS` → fewer chunks, coarser retrieval
 - Default (4000) is a good balance for typical markdown notes
+- `OVERLAP_CHARS` only has an effect when a section is long enough to require paragraph-level splitting
 
 ---
 
