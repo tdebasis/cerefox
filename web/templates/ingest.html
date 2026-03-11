@@ -17,27 +17,44 @@
       hx-swap="innerHTML"
       hx-indicator="#paste-spinner"
       enctype="multipart/form-data"
+      data-loading-modal
     >
       <input type="hidden" name="mode" value="paste">
       <label>
         Title <span style="color:var(--pico-del-color);">*</span>
         <input type="text" name="title" required placeholder="My note title">
       </label>
+
+      {% if projects %}
       <label>
-        Project
-        <select name="project_id">
-          <option value="">None</option>
+        Projects <small>(hold Ctrl/⌘ for multiple)</small>
+        <select name="project_ids" multiple size="{{ [projects|length, 4]|min }}" style="height:auto;">
           {% for p in projects %}
           <option value="{{ p.id }}">{{ p.name }}</option>
           {% endfor %}
         </select>
       </label>
+      {% endif %}
+
+      {% if meta_keys %}
+      <fieldset>
+        <legend style="font-size:0.9rem;">Metadata</legend>
+        {% for mk in meta_keys %}
+        <label style="margin-bottom:0.5rem;">
+          {{ mk.label or mk.key }}
+          {% if mk.description %}<small style="display:block;color:var(--pico-muted-color);">{{ mk.description }}</small>{% endif %}
+          <input type="text" name="meta__{{ mk.key }}" placeholder="{{ mk.key }}">
+        </label>
+        {% endfor %}
+      </fieldset>
+      {% endif %}
+
       <label>
         Content (Markdown)
         <textarea name="content" rows="10" placeholder="# My Note&#10;&#10;Content here…" required></textarea>
       </label>
       <button type="submit">
-        <span id="paste-spinner" class="htmx-indicator">⟳</span> Ingest text
+        <span id="paste-spinner" class="htmx-indicator">…</span> Ingest text
       </button>
     </form>
   </article>
@@ -51,30 +68,53 @@
       hx-swap="innerHTML"
       hx-indicator="#file-spinner"
       enctype="multipart/form-data"
+      data-loading-modal
     >
       <input type="hidden" name="mode" value="file">
       <label>
         Title <small>(optional — uses filename if blank)</small>
         <input type="text" name="title" placeholder="Optional override title">
       </label>
+
+      {% if projects %}
       <label>
-        Project
-        <select name="project_id">
-          <option value="">None</option>
+        Projects <small>(hold Ctrl/⌘ for multiple)</small>
+        <select name="project_ids" multiple size="{{ [projects|length, 4]|min }}" style="height:auto;">
           {% for p in projects %}
           <option value="{{ p.id }}">{{ p.name }}</option>
           {% endfor %}
         </select>
       </label>
+      {% endif %}
+
+      {% if meta_keys %}
+      <fieldset>
+        <legend style="font-size:0.9rem;">Metadata</legend>
+        {% for mk in meta_keys %}
+        <label style="margin-bottom:0.5rem;">
+          {{ mk.label or mk.key }}
+          {% if mk.description %}<small style="display:block;color:var(--pico-muted-color);">{{ mk.description }}</small>{% endif %}
+          <input type="text" name="meta__{{ mk.key }}" placeholder="{{ mk.key }}">
+        </label>
+        {% endfor %}
+      </fieldset>
+      {% endif %}
+
       <label>
-        Markdown file (.md)
-        <input type="file" name="file" accept=".md,.txt" required>
+        File (.md, .txt, .pdf, .docx)
+        <input type="file" name="file" accept=".md,.txt,.pdf,.docx" required>
       </label>
       <button type="submit">
-        <span id="file-spinner" class="htmx-indicator">⟳</span> Upload &amp; ingest
+        <span id="file-spinner" class="htmx-indicator">…</span> Upload &amp; ingest
       </button>
     </form>
   </article>
 
 </div>
+
+{% if not meta_keys %}
+<p style="color:var(--pico-muted-color);font-size:0.85rem;margin-top:1rem;">
+  No metadata keys registered yet. <a href="/settings">Add some in Settings</a> to attach structured metadata to documents.
+</p>
+{% endif %}
 {% endblock %}

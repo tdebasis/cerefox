@@ -233,3 +233,27 @@ class TestProjectMethods:
         mock_supabase_client.table.return_value.select.return_value.order.return_value.execute.return_value.data = []
         result = cerefox_client.list_projects()
         assert result == []
+
+    def test_get_project_doc_counts_returns_counts(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        rows = [{"project_id": "p1"}, {"project_id": "p1"}, {"project_id": "p2"}]
+        mock_supabase_client.table.return_value.select.return_value.in_.return_value.execute.return_value.data = rows
+        result = cerefox_client.get_project_doc_counts(["p1", "p2", "p3"])
+        assert result == {"p1": 2, "p2": 1, "p3": 0}
+
+    def test_get_project_doc_counts_empty_list(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        result = cerefox_client.get_project_doc_counts([])
+        assert result == {}
+        mock_supabase_client.table.assert_not_called()
+
+    def test_get_project_doc_counts_degrades_on_error(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.table.return_value.select.return_value.in_.return_value.execute.side_effect = Exception(
+            "DB error"
+        )
+        result = cerefox_client.get_project_doc_counts(["p1", "p2"])
+        assert result == {"p1": 0, "p2": 0}

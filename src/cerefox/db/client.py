@@ -104,6 +104,21 @@ class CerefoxClient:
             logger.error("update_document_chunk_stats failed: %s", exc)
             raise RuntimeError(f"update_document_chunk_stats failed: {exc}") from exc
 
+    def get_document_by_id(self, document_id: str) -> dict[str, Any] | None:
+        """Return the document with the given ID, or None if not found."""
+        try:
+            response = (
+                self.client.table("cerefox_documents")
+                .select("*")
+                .eq("id", document_id)
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("get_document_by_id failed: %s", exc)
+            raise RuntimeError(f"get_document_by_id failed: {exc}") from exc
+
     def delete_document(self, document_id: str) -> None:
         """Delete a document and cascade-delete its chunks."""
         try:
@@ -112,26 +127,150 @@ class CerefoxClient:
             logger.error("delete_document failed: %s", exc)
             raise RuntimeError(f"delete_document failed: {exc}") from exc
 
+    def delete_chunks_for_document(self, document_id: str) -> None:
+        """Delete all chunks for a document without deleting the document itself.
+
+        Used by update_document to clear old chunks before re-ingesting.
+        """
+        try:
+            self.client.table("cerefox_chunks").delete().eq("document_id", document_id).execute()
+        except Exception as exc:
+            logger.error("delete_chunks_for_document failed: %s", exc)
+            raise RuntimeError(f"delete_chunks_for_document failed: {exc}") from exc
+
+    def update_document(self, document_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Update fields on an existing document record and return the updated row."""
+        try:
+            response = (
+                self.client.table("cerefox_documents")
+                .update(data)
+                .eq("id", document_id)
+                .execute()
+            )
+            if not response.data:
+                raise RuntimeError("Update returned no data")
+            return response.data[0]
+        except Exception as exc:
+            logger.error("update_document failed: %s", exc)
+            raise RuntimeError(f"update_document failed: {exc}") from exc
+
     def list_documents(
         self,
         project_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """List documents, optionally filtered by project."""
+        """List documents, optionally filtered by project (M2M junction)."""
         try:
             query = (
                 self.client.table("cerefox_documents")
-                .select("id, title, source, source_path, project_id, metadata, chunk_count, total_chars, created_at")
+                .select(
+                    "id, title, source, source_path, metadata, chunk_count, total_chars, created_at"
+                )
                 .order("created_at", desc=True)
-                .range(offset, offset + limit - 1)
             )
             if project_id:
-                query = query.eq("project_id", project_id)
-            return query.execute().data or []
+                # Resolve document IDs from the M2M junction table.
+                jp = (
+                    self.client.table("cerefox_document_projects")
+                    .select("document_id")
+                    .eq("project_id", project_id)
+                    .execute()
+                )
+                doc_ids = [r["document_id"] for r in (jp.data or [])]
+                if not doc_ids:
+                    return []
+                query = query.in_("id", doc_ids)
+            return query.range(offset, offset + limit - 1).execute().data or []
         except Exception as exc:
             logger.error("list_documents failed: %s", exc)
             raise RuntimeError(f"list_documents failed: {exc}") from exc
+
+    # ── Document ↔ Project (M2M) ───────────────────────────────────────────────
+
+    def get_document_project_ids(self, document_id: str) -> list[str]:
+        """Return all project UUIDs currently assigned to a document."""
+        try:
+            response = (
+                self.client.table("cerefox_document_projects")
+                .select("project_id")
+                .eq("document_id", document_id)
+                .execute()
+            )
+            return [r["project_id"] for r in (response.data or [])]
+        except Exception as exc:
+            logger.error("get_document_project_ids failed: %s", exc)
+            raise RuntimeError(f"get_document_project_ids failed: {exc}") from exc
+
+    def assign_document_projects(self, document_id: str, project_ids: list[str]) -> None:
+        """Replace all project associations for a document.
+
+        Deletes existing associations then inserts the new set.
+        Pass an empty list to remove the document from all projects.
+        """
+        try:
+            self.client.table("cerefox_document_projects").delete().eq(
+                "document_id", document_id
+            ).execute()
+            if project_ids:
+                rows = [{"document_id": document_id, "project_id": pid} for pid in project_ids]
+                self.client.table("cerefox_document_projects").insert(rows).execute()
+        except Exception as exc:
+            logger.error("assign_document_projects failed: %s", exc)
+            raise RuntimeError(f"assign_document_projects failed: {exc}") from exc
+
+    def get_projects_for_documents(
+        self,
+        doc_ids: list[str],
+        projects: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return a {doc_id: [project_dicts]} map for a batch of document IDs.
+
+        Performs a single junction-table query rather than N individual lookups.
+        Degrades gracefully (returns empty lists) on error so display still works.
+        """
+        result: dict[str, list[dict[str, Any]]] = {did: [] for did in doc_ids}
+        if not doc_ids:
+            return result
+        projects_by_id = {p["id"]: p for p in projects}
+        try:
+            resp = (
+                self.client.table("cerefox_document_projects")
+                .select("document_id, project_id")
+                .in_("document_id", doc_ids)
+                .execute()
+            )
+            for row in (resp.data or []):
+                did = row["document_id"]
+                pid = row["project_id"]
+                if did in result and pid in projects_by_id:
+                    result[did].append(projects_by_id[pid])
+        except Exception as exc:
+            logger.error("get_projects_for_documents failed: %s", exc)
+        return result
+
+    def get_project_doc_counts(self, project_ids: list[str]) -> dict[str, int]:
+        """Return a {project_id: doc_count} map via a single junction-table query.
+
+        Degrades gracefully to all-zeros on error so the dashboard still renders.
+        """
+        counts: dict[str, int] = {pid: 0 for pid in project_ids}
+        if not project_ids:
+            return counts
+        try:
+            resp = (
+                self.client.table("cerefox_document_projects")
+                .select("project_id")
+                .in_("project_id", project_ids)
+                .execute()
+            )
+            for row in (resp.data or []):
+                pid = row["project_id"]
+                if pid in counts:
+                    counts[pid] += 1
+        except Exception as exc:
+            logger.error("get_project_doc_counts failed: %s", exc)
+        return counts
 
     # ── Chunks ─────────────────────────────────────────────────────────────────
 
@@ -207,6 +346,21 @@ class CerefoxClient:
             logger.error("list_projects failed: %s", exc)
             raise RuntimeError(f"list_projects failed: {exc}") from exc
 
+    def get_project_by_id(self, project_id: str) -> dict[str, Any] | None:
+        """Return a project by ID, or None if not found."""
+        try:
+            response = (
+                self.client.table("cerefox_projects")
+                .select("*")
+                .eq("id", project_id)
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("get_project_by_id failed: %s", exc)
+            raise RuntimeError(f"get_project_by_id failed: {exc}") from exc
+
     def create_project(self, name: str, description: str = "") -> dict[str, Any]:
         """Create a new project and return the created row."""
         try:
@@ -224,6 +378,24 @@ class CerefoxClient:
             logger.error("create_project failed: %s", exc)
             raise RuntimeError(f"create_project failed: {exc}") from exc
 
+    def update_project(self, project_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Update fields on an existing project and return the updated row."""
+        try:
+            response = (
+                self.client.table("cerefox_projects")
+                .update(data)
+                .eq("id", project_id)
+                .execute()
+            )
+            if not response.data:
+                raise RuntimeError("Project update returned no data")
+            return response.data[0]
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            logger.error("update_project failed: %s", exc)
+            raise RuntimeError(f"update_project failed: {exc}") from exc
+
     def delete_project(self, project_id: str) -> None:
         """Delete a project by ID. Documents assigned to it are not deleted."""
         try:
@@ -235,14 +407,47 @@ class CerefoxClient:
     def count_documents(self, project_id: str | None = None) -> int:
         """Return the total number of documents, optionally filtered by project."""
         try:
-            query = self.client.table("cerefox_documents").select("id", count="exact").limit(1)
             if project_id:
-                query = query.eq("project_id", project_id)
+                # Count via junction table for M2M project filter.
+                response = (
+                    self.client.table("cerefox_document_projects")
+                    .select("document_id", count="exact")
+                    .eq("project_id", project_id)
+                    .limit(1)
+                    .execute()
+                )
+                return response.count or 0
+            query = self.client.table("cerefox_documents").select("id", count="exact").limit(1)
             response = query.execute()
             return response.count or 0
         except Exception as exc:
             logger.error("count_documents failed: %s", exc)
             raise RuntimeError(f"count_documents failed: {exc}") from exc
+
+    # ── Metadata keys ──────────────────────────────────────────────────────────
+
+    def list_metadata_keys(self) -> list[dict[str, Any]]:
+        """Return all registered metadata keys ordered alphabetically."""
+        return self.rpc("cerefox_list_metadata_keys", {})
+
+    def upsert_metadata_key(
+        self,
+        key: str,
+        label: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """Create or update a metadata key in the registry and return the row."""
+        rows = self.rpc(
+            "cerefox_upsert_metadata_key",
+            {"p_key": key, "p_label": label, "p_description": description},
+        )
+        if not rows:
+            raise RuntimeError("cerefox_upsert_metadata_key returned no data")
+        return rows[0]
+
+    def delete_metadata_key(self, key: str) -> None:
+        """Remove a metadata key from the registry."""
+        self.rpc("cerefox_delete_metadata_key", {"p_key": key})
 
     # ── Search (convenience wrappers around RPCs) ──────────────────────────────
 

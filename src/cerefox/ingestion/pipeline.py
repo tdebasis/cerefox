@@ -16,7 +16,7 @@ Usage::
         text="# My note\\n\\nSome content.",
         title="My note",
         source="paste",
-        project_name="personal",
+        project_ids=["<uuid>"],
     )
 """
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from cerefox.chunking.markdown import chunk_markdown
@@ -46,7 +46,7 @@ class IngestResult:
     chunk_count: int
     total_chars: int
     skipped: bool       # True when the document was already present (hash match)
-    project_id: str | None = None
+    project_ids: list[str] = field(default_factory=list)
 
 
 class IngestionPipeline:
@@ -80,6 +80,8 @@ class IngestionPipeline:
         source: str = "paste",
         source_path: str | None = None,
         project_name: str | None = None,
+        project_id: str | None = None,
+        project_ids: list[str] | None = None,
         metadata: dict | None = None,
     ) -> IngestResult:
         """Ingest a raw markdown string.
@@ -90,32 +92,40 @@ class IngestionPipeline:
             source: Origin label (e.g. ``"file"``, ``"paste"``, ``"agent"``).
             source_path: Optional filesystem path or URL the content came from.
             project_name: If given, the document is linked to this project
-                (created automatically if it doesn't exist).
+                (created automatically if it doesn't exist).  Ignored when
+                ``project_ids`` is provided.
+            project_id: Single project UUID (legacy convenience; converted to
+                ``project_ids=[project_id]`` internally).
+            project_ids: List of project UUIDs to assign (M2M).  Takes
+                precedence over ``project_id`` and ``project_name``.
             metadata: Arbitrary key/value pairs stored as JSONB on the document.
+                When ``settings.metadata_strict`` is True, only keys registered
+                in ``cerefox_metadata_keys`` are accepted (if any are registered).
 
         Returns:
             :class:`IngestResult` summary.
         """
+        # Resolve project_ids from the various caller styles.
+        resolved_ids = self._resolve_project_ids(project_ids, project_id, project_name)
+
+        # Validate metadata against the key registry.
+        validated_meta = self._validate_metadata(metadata or {})
+
         content_hash = _hash(text)
 
         # ── Deduplication ──────────────────────────────────────────────────
         existing = self._client.get_document_by_hash(content_hash)
         if existing is not None:
             log.info("Document already ingested (hash match): %s", existing["id"])
+            existing_project_ids = self._client.get_document_project_ids(existing["id"])
             return IngestResult(
                 document_id=existing["id"],
                 title=existing.get("title", title),
                 chunk_count=existing.get("chunk_count", 0),
                 total_chars=existing.get("total_chars", 0),
                 skipped=True,
-                project_id=existing.get("project_id"),
+                project_ids=existing_project_ids,
             )
-
-        # ── Project lookup / creation ──────────────────────────────────────
-        project_id: str | None = None
-        if project_name:
-            project = self._client.get_or_create_project(project_name)
-            project_id = project["id"]
 
         # ── Chunk ─────────────────────────────────────────────────────────
         s = self._settings
@@ -134,14 +144,17 @@ class IngestionPipeline:
                 "source": source,
                 "source_path": source_path,
                 "content_hash": content_hash,
-                "project_id": project_id,
-                "metadata": metadata or {},
+                "metadata": validated_meta,
                 "chunk_count": len(chunks),
                 "total_chars": total_chars,
             }
         )
         document_id: str = doc_row["id"]
         log.info("Created document %s (%d chunks)", document_id, len(chunks))
+
+        # ── Assign projects (M2M) ──────────────────────────────────────────
+        if resolved_ids:
+            self._client.assign_document_projects(document_id, resolved_ids)
 
         # ── Embed + store chunks ───────────────────────────────────────────
         if chunks:
@@ -171,7 +184,133 @@ class IngestionPipeline:
             chunk_count=len(chunks),
             total_chars=total_chars,
             skipped=False,
-            project_id=project_id,
+            project_ids=resolved_ids,
+        )
+
+    def update_document(
+        self,
+        document_id: str,
+        text: str,
+        title: str,
+        project_id: str | None = None,
+        project_ids: list[str] | None = None,
+        metadata: dict | None = None,
+    ) -> IngestResult:
+        """Re-ingest an existing document in place, preserving its ID.
+
+        Replaces the document's content, title, and metadata. Old chunks are
+        deleted and new ones are computed from the provided text. The document
+        UUID is kept, so any external references remain valid.
+
+        Project assignments are only updated when ``project_ids`` (or legacy
+        ``project_id``) is explicitly provided; ``None`` leaves current
+        assignments unchanged, while ``[]`` removes all project assignments.
+
+        Args:
+            document_id: UUID of the document to update.
+            text: New markdown content.
+            title: New document title.
+            project_id: Single project UUID (legacy; prefer ``project_ids``).
+            project_ids: New list of project UUIDs.  ``None`` = unchanged;
+                ``[]`` = remove from all projects.
+            metadata: New metadata dict. If None, existing metadata is preserved.
+
+        Returns:
+            :class:`IngestResult` summary (skipped=False always).
+
+        Raises:
+            ValueError: If the document is not found, or if the new content is
+                identical to another document (hash collision on a different ID).
+        """
+        # ── Verify document exists ─────────────────────────────────────────
+        existing = self._client.get_document_by_id(document_id)
+        if existing is None:
+            raise ValueError(f"Document {document_id!r} not found")
+
+        # ── Hash deduplication (guard against collision with OTHER docs) ───
+        new_hash = _hash(text)
+        collision = self._client.get_document_by_hash(new_hash)
+        if collision is not None and collision["id"] != document_id:
+            raise ValueError(
+                f"Identical content already exists as document {collision['title']!r}. "
+                "Edit that document or change the content before saving."
+            )
+
+        # ── Validate metadata ──────────────────────────────────────────────
+        if metadata is not None:
+            metadata = self._validate_metadata(metadata)
+
+        # ── Chunk + embed ──────────────────────────────────────────────────
+        s = self._settings
+        chunks = chunk_markdown(
+            text,
+            max_chunk_chars=s.max_chunk_chars,
+            min_chunk_chars=s.min_chunk_chars,
+            overlap_chars=s.overlap_chars,
+        )
+        total_chars = sum(c.char_count for c in chunks)
+
+        # Embed before touching the DB — if embedding fails we haven't broken anything.
+        texts = [c.content for c in chunks]
+        embeddings = self._embedder.embed_batch(texts) if chunks else []
+
+        # ── Swap chunks ────────────────────────────────────────────────────
+        self._client.delete_chunks_for_document(document_id)
+
+        # ── Update document record ─────────────────────────────────────────
+        update_data: dict = {
+            "title": title,
+            "content_hash": new_hash,
+            "chunk_count": len(chunks),
+            "total_chars": total_chars,
+        }
+        if metadata is not None:
+            update_data["metadata"] = metadata
+
+        self._client.update_document(document_id, update_data)
+        log.info("Updated document %s (%d chunks)", document_id, len(chunks))
+
+        # ── Update project associations if provided ────────────────────────
+        # Resolve: project_ids takes precedence over project_id.
+        # None = "leave unchanged"; [] = "remove from all projects".
+        new_project_ids: list[str] | None = None
+        if project_ids is not None:
+            new_project_ids = [p for p in project_ids if p]
+        elif project_id is not None:
+            new_project_ids = [project_id]
+
+        if new_project_ids is not None:
+            self._client.assign_document_projects(document_id, new_project_ids)
+            final_project_ids = new_project_ids
+        else:
+            final_project_ids = self._client.get_document_project_ids(document_id)
+
+        # ── Insert new chunks ──────────────────────────────────────────────
+        if chunks:
+            chunk_rows = [
+                {
+                    "document_id": document_id,
+                    "chunk_index": c.chunk_index,
+                    "heading_path": c.heading_path,
+                    "heading_level": c.heading_level,
+                    "title": c.title,
+                    "content": c.content,
+                    "char_count": c.char_count,
+                    "embedding_primary": embeddings[i],
+                    "embedder_primary": self._embedder.model_name,
+                }
+                for i, c in enumerate(chunks)
+            ]
+            self._client.insert_chunks(chunk_rows)
+            log.info("Re-stored %d chunks for document %s", len(chunks), document_id)
+
+        return IngestResult(
+            document_id=document_id,
+            title=title,
+            chunk_count=len(chunks),
+            total_chars=total_chars,
+            skipped=False,
+            project_ids=final_project_ids,
         )
 
     def ingest_file(
@@ -179,6 +318,7 @@ class IngestionPipeline:
         path: str,
         title: str | None = None,
         project_name: str | None = None,
+        project_ids: list[str] | None = None,
         metadata: dict | None = None,
     ) -> IngestResult:
         """Read a markdown file from disk and ingest it.
@@ -186,7 +326,8 @@ class IngestionPipeline:
         Args:
             path: Absolute or relative path to a ``.md`` file.
             title: Document title.  Defaults to the filename stem.
-            project_name: Optional project to assign the document to.
+            project_name: Optional project name to assign the document to.
+            project_ids: Optional list of project UUIDs (M2M).
             metadata: Arbitrary JSONB metadata.
 
         Returns:
@@ -202,8 +343,63 @@ class IngestionPipeline:
             source="file",
             source_path=str(p.resolve()),
             project_name=project_name,
+            project_ids=project_ids,
             metadata=metadata,
         )
+
+    # ── Private helpers ────────────────────────────────────────────────────
+
+    def _resolve_project_ids(
+        self,
+        project_ids: list[str] | None,
+        project_id: str | None,
+        project_name: str | None,
+    ) -> list[str]:
+        """Return a normalised list of project UUIDs from the caller's inputs."""
+        if project_ids is not None:
+            return [p for p in project_ids if p]  # strip empties / empty strings
+        if project_id:
+            return [project_id]
+        if project_name:
+            project = self._client.get_or_create_project(project_name)
+            return [project["id"]]
+        return []
+
+    def _validate_metadata(self, metadata: dict) -> dict:
+        """Validate metadata keys against the registry.
+
+        Behaviour when ``settings.metadata_strict`` is True:
+          - If no keys are registered → pass everything through (registry not set up).
+          - If keys are registered and unknown keys are present → raise ValueError.
+
+        Behaviour when ``settings.metadata_strict`` is False:
+          - Unknown keys are logged and stripped; known keys are passed through.
+        """
+        if not metadata:
+            return metadata
+
+        try:
+            registered = {k["key"] for k in self._client.list_metadata_keys()}
+        except Exception as exc:
+            log.warning("Could not fetch metadata key registry: %s — skipping validation", exc)
+            return metadata
+
+        # Empty registry → not configured → pass everything through.
+        if not registered:
+            return metadata
+
+        unknown = set(metadata) - registered
+        if not unknown:
+            return metadata
+
+        if self._settings.metadata_strict:
+            raise ValueError(
+                f"Unknown metadata key(s): {sorted(unknown)}. "
+                "Register them first via /settings or `cerefox metadata-keys add`."
+            )
+
+        log.warning("Stripping unregistered metadata key(s): %s", sorted(unknown))
+        return {k: v for k, v in metadata.items() if k in registered}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

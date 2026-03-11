@@ -44,7 +44,7 @@ class SearchResult:
     score: float
     doc_title: str
     doc_source: str
-    doc_project_id: str | None
+    doc_project_ids: list[str]
     doc_metadata: dict
 
     @classmethod
@@ -60,7 +60,7 @@ class SearchResult:
             score=float(row.get("score") or 0.0),
             doc_title=row.get("doc_title") or "",
             doc_source=row.get("doc_source") or "",
-            doc_project_id=row.get("doc_project_id"),
+            doc_project_ids=row.get("doc_project_ids") or [],
             doc_metadata=row.get("doc_metadata") or {},
         )
 
@@ -73,6 +73,7 @@ class DocResult:
     doc_title: str
     doc_source: str
     doc_metadata: dict
+    doc_project_ids: list[str]
     best_score: float
     best_chunk_heading_path: list[str]
     full_content: str
@@ -86,6 +87,7 @@ class DocResult:
             doc_title=row.get("doc_title") or "",
             doc_source=row.get("doc_source") or "",
             doc_metadata=row.get("doc_metadata") or {},
+            doc_project_ids=row.get("doc_project_ids") or [],
             best_score=float(row.get("best_score") or 0.0),
             best_chunk_heading_path=row.get("best_chunk_heading_path") or [],
             full_content=row.get("full_content") or "",

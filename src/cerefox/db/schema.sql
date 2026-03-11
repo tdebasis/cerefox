@@ -7,6 +7,7 @@
 
 -- ── Projects ──────────────────────────────────────────────────────────────────
 -- Lightweight user-defined categories. No predefined taxonomy.
+-- A document can belong to many projects (see cerefox_document_projects).
 
 CREATE TABLE IF NOT EXISTS cerefox_projects (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,8 +20,21 @@ CREATE TABLE IF NOT EXISTS cerefox_projects (
     CONSTRAINT cerefox_projects_name_unique UNIQUE (name)
 );
 
+-- ── Metadata key registry ─────────────────────────────────────────────────────
+-- User-defined metadata keys. When metadata_strict mode is enabled in the
+-- Python layer, only keys registered here are accepted during ingestion.
+
+CREATE TABLE IF NOT EXISTS cerefox_metadata_keys (
+    key         TEXT        PRIMARY KEY,
+    label       TEXT,
+    description TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ── Documents ─────────────────────────────────────────────────────────────────
 -- One row per ingested document (markdown file, paste, agent write-back, etc.)
+-- Project assignment lives in the cerefox_document_projects junction table.
 
 CREATE TABLE IF NOT EXISTS cerefox_documents (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -30,7 +44,6 @@ CREATE TABLE IF NOT EXISTS cerefox_documents (
     source_path  TEXT,
     -- SHA-256 of raw markdown content; used for deduplication
     content_hash TEXT        NOT NULL,
-    project_id   UUID        REFERENCES cerefox_projects(id) ON DELETE SET NULL,
     metadata     JSONB       NOT NULL DEFAULT '{}'::jsonb,
     chunk_count  INT         NOT NULL DEFAULT 0,
     total_chars  INT         NOT NULL DEFAULT 0,
@@ -38,6 +51,15 @@ CREATE TABLE IF NOT EXISTS cerefox_documents (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT cerefox_documents_hash_unique UNIQUE (content_hash)
+);
+
+-- ── Document ↔ Project junction ───────────────────────────────────────────────
+-- Many-to-many: one document can belong to zero or more projects.
+
+CREATE TABLE IF NOT EXISTS cerefox_document_projects (
+    document_id UUID NOT NULL REFERENCES cerefox_documents(id) ON DELETE CASCADE,
+    project_id  UUID NOT NULL REFERENCES cerefox_projects(id)  ON DELETE CASCADE,
+    PRIMARY KEY (document_id, project_id)
 );
 
 -- ── Chunks ────────────────────────────────────────────────────────────────────
@@ -109,13 +131,16 @@ CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_document
 CREATE INDEX IF NOT EXISTS idx_cerefox_docs_metadata
     ON cerefox_documents USING GIN(metadata);
 
--- Documents by project
-CREATE INDEX IF NOT EXISTS idx_cerefox_docs_project
-    ON cerefox_documents(project_id);
-
 -- Documents by content_hash (unique constraint covers equality; this covers range/prefix)
 CREATE INDEX IF NOT EXISTS idx_cerefox_docs_hash
     ON cerefox_documents(content_hash);
+
+-- Junction table lookup — find all projects for a document, and vice-versa
+CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_doc
+    ON cerefox_document_projects(document_id);
+
+CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_project
+    ON cerefox_document_projects(project_id);
 
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 
@@ -138,3 +163,35 @@ CREATE OR REPLACE TRIGGER trig_cerefox_documents_updated
 CREATE OR REPLACE TRIGGER trig_cerefox_chunks_updated
     BEFORE UPDATE ON cerefox_chunks
     FOR EACH ROW EXECUTE FUNCTION cerefox_set_updated_at();
+
+CREATE OR REPLACE TRIGGER trig_cerefox_metadata_keys_updated
+    BEFORE UPDATE ON cerefox_metadata_keys
+    FOR EACH ROW EXECUTE FUNCTION cerefox_set_updated_at();
+
+-- ── Live-database migration ───────────────────────────────────────────────────
+-- When applying this schema to an existing database that still has the old
+-- project_id column on cerefox_documents, drop it and migrate existing
+-- document-project associations to the new junction table.
+-- Safe to re-run — wrapped in a DO block that checks column existence.
+
+DO $$
+BEGIN
+    -- Migrate existing project_id → cerefox_document_projects
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'cerefox_documents'
+          AND column_name = 'project_id'
+    ) THEN
+        -- Copy existing single-project associations into the junction table.
+        -- Ignore duplicates in case of a partial previous migration.
+        INSERT INTO cerefox_document_projects (document_id, project_id)
+        SELECT id, project_id
+        FROM cerefox_documents
+        WHERE project_id IS NOT NULL
+        ON CONFLICT DO NOTHING;
+
+        -- Drop the old FK column and its index.
+        ALTER TABLE cerefox_documents DROP COLUMN project_id;
+    END IF;
+END;
+$$;

@@ -72,7 +72,7 @@ def _make_search_result(**kwargs) -> SearchResult:
         "score": 0.87,
         "doc_title": "Test Document",
         "doc_source": "file",
-        "doc_project_id": None,
+        "doc_project_ids": [],
         "doc_metadata": {},
     }
     return SearchResult(**{**defaults, **kwargs})
@@ -94,6 +94,10 @@ def mock_client():
         "total_chars": 1500,
     }
     client.list_chunks_for_document.return_value = [_make_chunk()]
+    client.get_projects_for_documents.return_value = {}
+    client.get_project_doc_counts.return_value = {}
+    client.list_metadata_keys.return_value = []
+    client.get_document_project_ids.return_value = []
     return client
 
 
@@ -158,6 +162,11 @@ class TestDashboard:
         mock_client.count_documents.return_value = 0
         resp = test_client.get("/")
         assert "ingest" in resp.text.lower()
+
+    def test_shows_doc_count_in_project_tiles(self, test_client, mock_client):
+        mock_client.get_project_doc_counts.return_value = {"proj-uuid-1": 7}
+        resp = test_client.get("/")
+        assert "7" in resp.text
 
 
 # ── Search / browser ──────────────────────────────────────────────────────────
@@ -245,6 +254,34 @@ class TestSearchPage:
         assert resp.status_code == 200
         assert "No results" in resp.text
 
+    def test_browse_mode_lists_docs_when_project_and_no_query(
+        self, test_client, mock_client
+    ):
+        """Selecting a project with no search query should list docs in that project."""
+        mock_client.list_documents.return_value = [_make_doc()]
+        resp = test_client.get("/search?project_id=proj-uuid-1")
+        assert resp.status_code == 200
+        assert "Test Document" in resp.text
+        # Should say "in project" not "for query"
+        assert "in project" in resp.text
+
+    def test_browse_mode_htmx_returns_partial(self, test_client, mock_client):
+        """HTMX browse request should still return a partial (no nav chrome)."""
+        mock_client.list_documents.return_value = [_make_doc()]
+        resp = test_client.get(
+            "/search?project_id=proj-uuid-1",
+            headers={"HX-Request": "true"},
+        )
+        assert resp.status_code == 200
+        assert "<nav" not in resp.text
+
+    def test_browse_mode_empty_project_shows_no_results(self, test_client, mock_client):
+        mock_client.list_documents.return_value = []
+        resp = test_client.get("/search?project_id=proj-uuid-1")
+        assert resp.status_code == 200
+        # Empty browse → no results state
+        assert "No results" in resp.text or "empty" in resp.text.lower()
+
 
 # ── Document viewer ───────────────────────────────────────────────────────────
 
@@ -258,9 +295,25 @@ class TestDocumentView:
         resp = test_client.get("/document/doc-uuid-1")
         assert "Test Document" in resp.text
 
-    def test_shows_chunk_content(self, test_client, mock_client):
+    def test_does_not_load_chunks_on_initial_view(self, test_client, mock_client):
+        """Chunks are lazy-loaded via HTMX — list_chunks_for_document must not be called."""
+        test_client.get("/document/doc-uuid-1")
+        mock_client.list_chunks_for_document.assert_not_called()
+
+    def test_shows_htmx_show_chunks_button(self, test_client, mock_client):
+        """Initial page should have the lazy-load button, not rendered chunk text."""
         resp = test_client.get("/document/doc-uuid-1")
-        assert "Some content here." in resp.text
+        assert "Show" in resp.text
+        assert "/chunks" in resp.text
+        assert "Some content here." not in resp.text
+
+    def test_shows_htmx_show_content_button(self, test_client, mock_client):
+        """Initial page should have the Show full content lazy-load button."""
+        resp = test_client.get("/document/doc-uuid-1")
+        assert "/content" in resp.text
+        assert "Show full content" in resp.text
+        # Full content text must NOT be in the initial response
+        assert "# Test Document" not in resp.text
 
     def test_shows_error_for_missing_doc(self, test_client, mock_client):
         mock_client.reconstruct_doc.return_value = None
@@ -273,6 +326,123 @@ class TestDocumentView:
         resp = test_client.get("/document/doc-uuid-1")
         assert resp.status_code == 200
         assert "DB error" in resp.text
+
+
+class TestDocumentChunks:
+    """Lazy-loaded /document/{id}/chunks partial endpoint."""
+
+    def test_returns_200(self, test_client, mock_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert resp.status_code == 200
+
+    def test_returns_chunk_content(self, test_client, mock_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert "Some content here." in resp.text
+
+    def test_calls_list_chunks(self, test_client, mock_client):
+        test_client.get("/document/doc-uuid-1/chunks")
+        mock_client.list_chunks_for_document.assert_called_once_with("doc-uuid-1")
+
+    def test_includes_hide_button(self, test_client, mock_client):
+        """Response must include a Hide chunks button with the correct HTMX endpoint."""
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert "chunks-hide" in resp.text
+        assert "Hide chunks" in resp.text
+
+    def test_includes_document_id_in_hide_link(self, test_client, mock_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert "doc-uuid-1" in resp.text
+
+    def test_empty_chunks_shows_message(self, test_client, mock_client):
+        mock_client.list_chunks_for_document.return_value = []
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert resp.status_code == 200
+        assert "no chunks" in resp.text.lower() or "Re-ingest" in resp.text
+
+    def test_degrades_gracefully_on_db_error(self, test_client, mock_client):
+        mock_client.list_chunks_for_document.side_effect = RuntimeError("DB error")
+        resp = test_client.get("/document/doc-uuid-1/chunks")
+        assert resp.status_code == 200  # graceful degradation, not a 500
+
+
+class TestDocumentChunksHide:
+    """Collapsed Show-chunks button returned by /document/{id}/chunks-hide."""
+
+    def test_returns_200(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks-hide?n=3")
+        assert resp.status_code == 200
+
+    def test_contains_show_button(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks-hide?n=3")
+        assert "Show 3 chunk(s)" in resp.text
+
+    def test_targets_doc_chunks_div(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks-hide?n=3")
+        assert "doc-chunks" in resp.text
+
+    def test_contains_document_id(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/chunks-hide?n=3")
+        assert "doc-uuid-1" in resp.text
+
+    def test_zero_chunks_default(self, test_client):
+        """n defaults to 0 when omitted."""
+        resp = test_client.get("/document/doc-uuid-1/chunks-hide")
+        assert resp.status_code == 200
+        assert "Show 0 chunk(s)" in resp.text
+
+
+class TestDocumentContent:
+    """Lazy-loaded /document/{id}/content partial endpoint."""
+
+    def test_returns_200(self, test_client, mock_client):
+        resp = test_client.get("/document/doc-uuid-1/content")
+        assert resp.status_code == 200
+
+    def test_returns_full_content(self, test_client, mock_client):
+        resp = test_client.get("/document/doc-uuid-1/content")
+        assert "# Test Document" in resp.text
+
+    def test_calls_reconstruct_doc(self, test_client, mock_client):
+        test_client.get("/document/doc-uuid-1/content")
+        mock_client.reconstruct_doc.assert_called_with("doc-uuid-1")
+
+    def test_includes_hide_button(self, test_client, mock_client):
+        """Response must include a Hide content button with the correct HTMX endpoint."""
+        resp = test_client.get("/document/doc-uuid-1/content")
+        assert "content-hide" in resp.text
+        assert "Hide content" in resp.text
+
+    def test_degrades_gracefully_on_db_error(self, test_client, mock_client):
+        mock_client.reconstruct_doc.side_effect = RuntimeError("DB error")
+        resp = test_client.get("/document/doc-uuid-1/content")
+        assert resp.status_code == 200  # graceful degradation, not a 500
+
+
+class TestDocumentContentHide:
+    """Collapsed Show-content button returned by /document/{id}/content-hide."""
+
+    def test_returns_200(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/content-hide?chars=1500")
+        assert resp.status_code == 200
+
+    def test_contains_show_button_with_char_count(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/content-hide?chars=1500")
+        assert "Show full content" in resp.text
+        assert "1,500" in resp.text
+
+    def test_targets_doc_content_div(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/content-hide?chars=1500")
+        assert "doc-content" in resp.text
+
+    def test_contains_document_id(self, test_client):
+        resp = test_client.get("/document/doc-uuid-1/content-hide?chars=1500")
+        assert "doc-uuid-1" in resp.text
+
+    def test_zero_chars_shows_placeholder(self, test_client):
+        """chars defaults to 0 — should show '?' instead of '0'."""
+        resp = test_client.get("/document/doc-uuid-1/content-hide")
+        assert resp.status_code == 200
+        assert "?" in resp.text
 
 
 # ── Ingest page ───────────────────────────────────────────────────────────────
@@ -431,3 +601,69 @@ class TestProjectsPage:
         resp = test_client.get("/projects")
         assert resp.status_code == 200
         assert "DB error" in resp.text
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+
+class TestSettingsPage:
+    def test_returns_200(self, test_client, mock_client):
+        mock_client.list_metadata_keys.return_value = []
+        resp = test_client.get("/settings")
+        assert resp.status_code == 200
+
+    def test_shows_registered_keys(self, test_client, mock_client):
+        mock_client.list_metadata_keys.return_value = [
+            {"key": "author", "label": "Author", "description": None,
+             "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
+        ]
+        resp = test_client.get("/settings")
+        assert "author" in resp.text
+
+    def test_upsert_key_redirects_on_success(self, test_client, mock_client):
+        mock_client.upsert_metadata_key.return_value = {}
+        resp = test_client.post(
+            "/settings/metadata-keys",
+            data={"key": "author", "label": "Author", "description": ""},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/settings"
+
+    def test_upsert_key_shows_error_on_failure(self, test_client, mock_client):
+        mock_client.upsert_metadata_key.side_effect = RuntimeError("ambiguous column")
+        mock_client.list_metadata_keys.return_value = []
+        resp = test_client.post(
+            "/settings/metadata-keys",
+            data={"key": "bad", "label": "", "description": ""},
+            follow_redirects=False,
+        )
+        # Must re-render the settings page (not redirect) so the error is visible.
+        assert resp.status_code == 200
+        assert "ambiguous column" in resp.text
+
+    def test_upsert_key_normalises_key_name(self, test_client, mock_client):
+        mock_client.upsert_metadata_key.return_value = {}
+        test_client.post(
+            "/settings/metadata-keys",
+            data={"key": "My Key", "label": "", "description": ""},
+        )
+        mock_client.upsert_metadata_key.assert_called_once_with(
+            key="my_key", label=None, description=None
+        )
+
+    def test_delete_key_redirects_on_success(self, test_client, mock_client):
+        resp = test_client.post(
+            "/settings/metadata-keys/author/delete", follow_redirects=False
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/settings"
+
+    def test_delete_key_shows_error_on_failure(self, test_client, mock_client):
+        mock_client.delete_metadata_key.side_effect = RuntimeError("constraint violation")
+        mock_client.list_metadata_keys.return_value = []
+        resp = test_client.post(
+            "/settings/metadata-keys/author/delete", follow_redirects=False
+        )
+        assert resp.status_code == 200
+        assert "constraint violation" in resp.text

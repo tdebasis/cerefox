@@ -5,10 +5,26 @@
 -- All RPCs are SECURITY DEFINER so they can be called safely via the
 -- Supabase anon/service key without exposing the underlying tables directly.
 
--- ── Shared return type columns ────────────────────────────────────────────────
--- All search RPCs return the same shape for consistency:
+-- ── Return-type change drops ──────────────────────────────────────────────────
+-- When CREATE OR REPLACE cannot be used because the return type changes,
+-- we drop the old function first.  These drops are safe to re-run.
+
+-- Drop old 4-param overload (pre p_min_score) and current 5-param semantic search
+DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID);
+DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID, FLOAT);
+
+-- Drop old hybrid/fts/search_docs/reconstruct_doc signatures that returned
+-- doc_project_id UUID (singular); new versions return doc_project_ids UUID[] (array).
+DROP FUNCTION IF EXISTS cerefox_hybrid_search(TEXT, VECTOR(768), INT, FLOAT, BOOLEAN, UUID, FLOAT);
+DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
+DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT);
+DROP FUNCTION IF EXISTS cerefox_reconstruct_doc(UUID);
+
+-- ── Shared return type note ────────────────────────────────────────────────────
+-- All chunk-level search RPCs return the same shape for consistency:
 --   chunk_id, document_id, chunk_index, title, content, heading_path,
---   heading_level, score, doc_title, doc_source, doc_project_id, doc_metadata
+--   heading_level, score, doc_title, doc_source, doc_project_ids, doc_metadata
+-- Note: doc_project_ids is UUID[] (array) — a document can belong to many projects.
 
 -- ── Hybrid Search ─────────────────────────────────────────────────────────────
 -- Combines full-text search (FTS) and vector similarity with a configurable
@@ -28,18 +44,18 @@ CREATE OR REPLACE FUNCTION cerefox_hybrid_search(
     p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
-    chunk_id      UUID,
-    document_id   UUID,
-    chunk_index   INT,
-    title         TEXT,
-    content       TEXT,
-    heading_path  TEXT[],
-    heading_level INT,
-    score         FLOAT,
-    doc_title     TEXT,
-    doc_source    TEXT,
-    doc_project_id UUID,
-    doc_metadata  JSONB
+    chunk_id       UUID,
+    document_id    UUID,
+    chunk_index    INT,
+    title          TEXT,
+    content        TEXT,
+    heading_path   TEXT[],
+    heading_level  INT,
+    score          FLOAT,
+    doc_title      TEXT,
+    doc_source     TEXT,
+    doc_project_ids UUID[],
+    doc_metadata   JSONB
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -57,7 +73,10 @@ BEGIN
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
             WHERE c.fts @@ query_fts
-              AND (p_project_id IS NULL OR d.project_id = p_project_id)
+              AND (p_project_id IS NULL OR EXISTS (
+                      SELECT 1 FROM cerefox_document_projects dp
+                      WHERE dp.document_id = d.id AND dp.project_id = p_project_id
+                  ))
             ORDER BY fts_score DESC
             LIMIT candidate_count
         ),
@@ -72,7 +91,10 @@ BEGIN
                 END AS vec_score
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
-            WHERE (p_project_id IS NULL OR d.project_id = p_project_id)
+            WHERE (p_project_id IS NULL OR EXISTS (
+                      SELECT 1 FROM cerefox_document_projects dp
+                      WHERE dp.document_id = d.id AND dp.project_id = p_project_id
+                  ))
             ORDER BY
                 CASE
                     WHEN p_use_upgrade AND c.embedding_upgrade IS NOT NULL
@@ -108,7 +130,8 @@ BEGIN
         cm.score,
         d.title         AS doc_title,
         d.source        AS doc_source,
-        d.project_id    AS doc_project_id,
+        ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id) AS doc_project_ids,
         d.metadata      AS doc_metadata
     FROM combined cm
     JOIN cerefox_chunks   c ON c.id = cm.id
@@ -131,18 +154,18 @@ CREATE OR REPLACE FUNCTION cerefox_fts_search(
     p_project_id  UUID DEFAULT NULL
 )
 RETURNS TABLE (
-    chunk_id      UUID,
-    document_id   UUID,
-    chunk_index   INT,
-    title         TEXT,
-    content       TEXT,
-    heading_path  TEXT[],
-    heading_level INT,
-    score         FLOAT,
-    doc_title     TEXT,
-    doc_source    TEXT,
-    doc_project_id UUID,
-    doc_metadata  JSONB
+    chunk_id       UUID,
+    document_id    UUID,
+    chunk_index    INT,
+    title          TEXT,
+    content        TEXT,
+    heading_path   TEXT[],
+    heading_level  INT,
+    score          FLOAT,
+    doc_title      TEXT,
+    doc_source     TEXT,
+    doc_project_ids UUID[],
+    doc_metadata   JSONB
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -162,12 +185,16 @@ BEGIN
         ts_rank_cd(c.fts, query_fts)::FLOAT AS score,
         d.title         AS doc_title,
         d.source        AS doc_source,
-        d.project_id    AS doc_project_id,
+        ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id) AS doc_project_ids,
         d.metadata      AS doc_metadata
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
     WHERE c.fts @@ query_fts
-      AND (p_project_id IS NULL OR d.project_id = p_project_id)
+      AND (p_project_id IS NULL OR EXISTS (
+              SELECT 1 FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id AND dp.project_id = p_project_id
+          ))
     ORDER BY score DESC
     LIMIT p_match_count;
 END;
@@ -175,10 +202,6 @@ $$;
 
 -- ── Semantic-Only Search ──────────────────────────────────────────────────────
 -- Pure vector similarity. Best for conceptual / paraphrase queries.
-
--- Drop the old 4-parameter overload (without p_min_score) so PostgREST doesn't
--- see two candidates and throw PGRST203.
-DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID);
 
 CREATE OR REPLACE FUNCTION cerefox_semantic_search(
     p_query_embedding VECTOR(768),
@@ -188,18 +211,18 @@ CREATE OR REPLACE FUNCTION cerefox_semantic_search(
     p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
-    chunk_id      UUID,
-    document_id   UUID,
-    chunk_index   INT,
-    title         TEXT,
-    content       TEXT,
-    heading_path  TEXT[],
-    heading_level INT,
-    score         FLOAT,
-    doc_title     TEXT,
-    doc_source    TEXT,
-    doc_project_id UUID,
-    doc_metadata  JSONB
+    chunk_id       UUID,
+    document_id    UUID,
+    chunk_index    INT,
+    title          TEXT,
+    content        TEXT,
+    heading_path   TEXT[],
+    heading_level  INT,
+    score          FLOAT,
+    doc_title      TEXT,
+    doc_source     TEXT,
+    doc_project_ids UUID[],
+    doc_metadata   JSONB
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -222,11 +245,15 @@ BEGIN
         END AS score,
         d.title         AS doc_title,
         d.source        AS doc_source,
-        d.project_id    AS doc_project_id,
+        ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id) AS doc_project_ids,
         d.metadata      AS doc_metadata
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
-    WHERE (p_project_id IS NULL OR d.project_id = p_project_id)
+    WHERE (p_project_id IS NULL OR EXISTS (
+              SELECT 1 FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id AND dp.project_id = p_project_id
+          ))
       AND (p_use_upgrade = FALSE OR c.embedding_upgrade IS NOT NULL)
       -- Optional minimum cosine similarity threshold.
       -- Default 0.0 means no filtering (returns all top-N results).
@@ -255,13 +282,14 @@ CREATE OR REPLACE FUNCTION cerefox_reconstruct_doc(
     p_document_id UUID
 )
 RETURNS TABLE (
-    document_id  UUID,
-    doc_title    TEXT,
-    doc_source   TEXT,
-    doc_metadata JSONB,
-    full_content TEXT,
-    chunk_count  INT,
-    total_chars  INT
+    document_id     UUID,
+    doc_title       TEXT,
+    doc_source      TEXT,
+    doc_metadata    JSONB,
+    doc_project_ids UUID[],
+    full_content    TEXT,
+    chunk_count     INT,
+    total_chars     INT
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -272,6 +300,8 @@ AS $$
         d.title         AS doc_title,
         d.source        AS doc_source,
         d.metadata      AS doc_metadata,
+        ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id) AS doc_project_ids,
         STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
         COUNT(*)::INT   AS chunk_count,
         SUM(c.char_count)::INT AS total_chars
@@ -291,7 +321,7 @@ $$;
 --   p_title       : Note title (required)
 --   p_content     : Markdown content (required)
 --   p_source      : Origin label, e.g. 'agent' (default: 'agent')
---   p_project_id  : Optional project UUID
+--   p_project_id  : Optional project UUID (assigns to a single project)
 --   p_metadata    : Optional JSONB metadata (e.g. agent name, session id)
 --
 -- Returns: the created document row (id, title, created_at)
@@ -313,21 +343,28 @@ SECURITY DEFINER
 AS $$
 DECLARE
     v_hash TEXT;
-    v_doc  cerefox_documents%ROWTYPE;
+    v_doc_id UUID;
+    v_created_at TIMESTAMPTZ;
 BEGIN
     -- Compute content hash to support deduplication on the caller side.
     v_hash := encode(sha256(p_content::BYTEA), 'hex');
 
     INSERT INTO cerefox_documents (
-        title, source, content_hash, project_id, metadata,
-        chunk_count, total_chars
+        title, source, content_hash, metadata, chunk_count, total_chars
     ) VALUES (
-        p_title, p_source, v_hash, p_project_id, p_metadata,
-        0, length(p_content)
+        p_title, p_source, v_hash, p_metadata, 0, length(p_content)
     )
-    RETURNING * INTO v_doc;
+    RETURNING cerefox_documents.id, cerefox_documents.created_at
+    INTO v_doc_id, v_created_at;
 
-    RETURN QUERY SELECT v_doc.id, v_doc.title, v_doc.created_at;
+    -- Assign to project if provided (many-to-many junction).
+    IF p_project_id IS NOT NULL THEN
+        INSERT INTO cerefox_document_projects (document_id, project_id)
+        VALUES (v_doc_id, p_project_id)
+        ON CONFLICT DO NOTHING;
+    END IF;
+
+    RETURN QUERY SELECT v_doc_id, p_title, v_created_at;
 END;
 $$;
 
@@ -345,7 +382,7 @@ $$;
 --   p_query_embedding : 768-dim query embedding (used for vector search)
 --   p_match_count     : Max documents to return (default: 5)
 --   p_alpha           : Semantic weight 0.0–1.0 (default: 0.7)
---   p_project_id      : Optional project filter
+--   p_project_id      : Optional project filter (M2M: document must be in project)
 --   p_min_score       : Minimum cosine similarity for vector results (default 0.0 here;
 --                       the Python layer applies CEREFOX_MIN_SEARCH_SCORE, default 0.65).
 --                       If calling this RPC directly (e.g. from an agent), set this
@@ -362,15 +399,16 @@ CREATE OR REPLACE FUNCTION cerefox_search_docs(
     p_min_score       FLOAT DEFAULT 0.0
 )
 RETURNS TABLE (
-    document_id             UUID,
-    doc_title               TEXT,
-    doc_source              TEXT,
-    doc_metadata            JSONB,
-    best_score              FLOAT,
-    best_chunk_heading_path TEXT[],
-    full_content            TEXT,
-    chunk_count             INT,
-    total_chars             INT
+    document_id              UUID,
+    doc_title                TEXT,
+    doc_source               TEXT,
+    doc_metadata             JSONB,
+    doc_project_ids          UUID[],
+    best_score               FLOAT,
+    best_chunk_heading_path  TEXT[],
+    full_content             TEXT,
+    chunk_count              INT,
+    total_chars              INT
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -381,8 +419,6 @@ AS $$
         -- enough candidates to fill p_match_count unique documents.
         -- Personal knowledge bases have many chunks per document, so a 10x
         -- multiplier reliably surfaces p_match_count distinct documents.
-        -- Trade-off: very large corpora (10 000+ chunks) may benefit from a
-        -- wider pool, but 10x is the right default here.
         SELECT * FROM cerefox_hybrid_search(
             p_query_text      := p_query_text,
             p_query_embedding := p_query_embedding,
@@ -397,11 +433,12 @@ AS $$
         -- One row per document: keep the highest-scoring chunk as representative.
         SELECT DISTINCT ON (document_id)
             document_id,
-            heading_path  AS best_chunk_heading_path,
-            score         AS best_score,
+            heading_path    AS best_chunk_heading_path,
+            score           AS best_score,
             doc_title,
             doc_source,
-            doc_metadata
+            doc_metadata,
+            doc_project_ids
         FROM chunk_results
         ORDER BY document_id, score DESC
     ),
@@ -428,6 +465,7 @@ AS $$
         td.doc_title,
         td.doc_source,
         td.doc_metadata,
+        td.doc_project_ids,
         td.best_score,
         td.best_chunk_heading_path,
         fd.full_content,
@@ -495,4 +533,57 @@ AS $$
     JOIN cerefox_chunks   c ON c.id = e.id
     JOIN cerefox_documents d ON c.document_id = d.id
     ORDER BY c.document_id, c.chunk_index;
+$$;
+
+-- ── Metadata key registry RPCs ────────────────────────────────────────────────
+-- Simple CRUD for the cerefox_metadata_keys registry.
+-- Used by the settings web UI and CLI.
+
+CREATE OR REPLACE FUNCTION cerefox_list_metadata_keys()
+RETURNS TABLE (
+    key         TEXT,
+    label       TEXT,
+    description TEXT,
+    created_at  TIMESTAMPTZ,
+    updated_at  TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+    SELECT key, label, description, created_at, updated_at
+    FROM cerefox_metadata_keys
+    ORDER BY key;
+$$;
+
+-- DROP required: return type changes from RETURNS TABLE(...) to RETURNS SETOF,
+-- which avoids the plpgsql ambiguity between the "key" output column variable
+-- and the "key" column name in ON CONFLICT (key).
+DROP FUNCTION IF EXISTS cerefox_upsert_metadata_key(TEXT, TEXT, TEXT);
+CREATE FUNCTION cerefox_upsert_metadata_key(
+    p_key         TEXT,
+    p_label       TEXT    DEFAULT NULL,
+    p_description TEXT    DEFAULT NULL
+)
+RETURNS SETOF cerefox_metadata_keys
+LANGUAGE sql
+SECURITY DEFINER
+AS $$
+    INSERT INTO cerefox_metadata_keys (key, label, description)
+    VALUES (p_key, p_label, p_description)
+    ON CONFLICT (key) DO UPDATE
+        SET label       = EXCLUDED.label,
+            description = EXCLUDED.description,
+            updated_at  = NOW()
+    RETURNING *;
+$$;
+
+CREATE OR REPLACE FUNCTION cerefox_delete_metadata_key(
+    p_key TEXT
+)
+RETURNS VOID
+LANGUAGE sql
+SECURITY DEFINER
+AS $$
+    DELETE FROM cerefox_metadata_keys WHERE key = p_key;
 $$;

@@ -1,59 +1,81 @@
 {% extends "base.html" %}
+{% from "macros.html" import action_button %}
 {% block title %}{{ doc.doc_title if doc else "Document" }} — Cerefox{% endblock %}
 
 {% block content %}
 {% if doc %}
-<nav aria-label="breadcrumb">
-  <ul>
-    <li><a href="/">Dashboard</a></li>
-    <li><a href="/search">Search</a></li>
-    <li>{{ doc.doc_title }}</li>
-  </ul>
-</nav>
-
 <hgroup>
   <h1>{{ doc.doc_title }}</h1>
   <p>
     Source: <code>{{ doc.doc_source }}</code> ·
     {{ doc.chunk_count }} chunk(s) ·
     {{ "{:,}".format(doc.total_chars) }} chars
+    {% if doc_projects %}
+    ·
+    {% for proj in doc_projects %}<span class="proj-pill">{{ proj.name }}</span>{% endfor %}
+    {% endif %}
   </p>
 </hgroup>
 
+{# display:contents makes the form box-model-invisible so the button is a direct flex item,
+   preventing the block-level form from stretching taller than the adjacent link button. #}
+<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1.5rem;">
+  {{ action_button("Edit", href="/document/" ~ doc.document_id ~ "/edit", variant="edit") }}
+  <form method="post" action="/document/{{ doc.document_id }}/delete"
+        style="margin:0;display:contents;">
+    {{ action_button("Delete", variant="danger", confirm="Delete «" ~ doc.doc_title ~ "»? This cannot be undone.") }}
+  </form>
+</div>
+
+{% if doc.doc_metadata %}
 <details>
   <summary>Metadata</summary>
-  <pre><code>{{ doc.doc_metadata | tojson(indent=2) }}</code></pre>
-</details>
-
-<h2>Chunks</h2>
-{% for chunk in chunks %}
-<div class="chunk-card">
-  <div class="breadcrumb">
-    {% for part in chunk.heading_path %}
-    <span>{{ part }}</span>
+  <dl style="margin:0.5rem 0;">
+    {% for key, value in doc.doc_metadata.items() %}
+    <div style="display:flex;gap:1rem;padding:0.25rem 0;border-bottom:1px solid var(--pico-muted-border-color);">
+      <dt style="min-width:8rem;font-weight:600;color:var(--pico-muted-color);">{{ key }}</dt>
+      <dd style="margin:0;">{{ value }}</dd>
+    </div>
     {% endfor %}
-    {% if not chunk.heading_path %}
-    <span style="color:var(--pico-muted-color);">(preamble)</span>
-    {% endif %}
-  </div>
-  <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.5;margin:0.5rem 0 0;">{{ chunk.content }}</pre>
-</div>
-{% else %}
-<div class="empty-state">
-  <p>This document has no chunks. Run <code>cerefox ingest</code> to index it.</p>
-</div>
-{% endfor %}
+  </dl>
+</details>
+{% endif %}
 
-{% if doc.full_content %}
-<h2>Full content</h2>
-<article>
-  <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.6;">{{ doc.full_content }}</pre>
-</article>
+{# ── Chunks — loaded lazily via HTMX ── #}
+<h2>Chunks</h2>
+<div id="doc-chunks">
+  <button hx-get="/document/{{ doc.document_id }}/chunks"
+          hx-target="#doc-chunks"
+          hx-swap="innerHTML"
+          hx-indicator="#chunks-spinner"
+          class="outline secondary btn-sm">
+    <span id="chunks-spinner" class="htmx-indicator">…</span>
+    Show {{ doc.chunk_count }} chunk(s)
+  </button>
+</div>
+
+{# ── Full content — loaded lazily via HTMX, same pattern as Chunks ── #}
+{% if doc.total_chars %}
+<h2 style="margin-top:1.5rem;">Full content</h2>
+<div id="doc-content">
+  <button hx-get="/document/{{ doc.document_id }}/content"
+          hx-target="#doc-content"
+          hx-swap="innerHTML"
+          hx-indicator="#content-spinner"
+          class="outline secondary btn-sm">
+    <span id="content-spinner" class="htmx-indicator">…</span>
+    Show full content ({{ "{:,}".format(doc.total_chars) }} chars)
+  </button>
+</div>
 {% endif %}
 
 {% else %}
 <div class="empty-state">
+  {% if error %}
+  <h2>⚠ {{ error }}</h2>
+  {% else %}
   <h2>Document not found</h2>
+  {% endif %}
   <p><a href="/search">← Back to search</a></p>
 </div>
 {% endif %}

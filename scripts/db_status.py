@@ -20,7 +20,9 @@ from cerefox.config import Settings
 # Objects we expect to exist after a successful db_deploy.py run
 _EXPECTED_TABLES = [
     "cerefox_projects",
+    "cerefox_metadata_keys",
     "cerefox_documents",
+    "cerefox_document_projects",
     "cerefox_chunks",
     "cerefox_migrations",
 ]
@@ -34,6 +36,9 @@ _EXPECTED_FUNCTIONS = [
     "cerefox_save_note",
     "cerefox_search_docs",
     "cerefox_context_expand",
+    "cerefox_list_metadata_keys",
+    "cerefox_upsert_metadata_key",
+    "cerefox_delete_metadata_key",
 ]
 
 _EXPECTED_EXTENSIONS = ["uuid-ossp", "vector"]
@@ -44,8 +49,9 @@ _EXPECTED_INDEXES = [
     "idx_cerefox_chunks_emb_upgrade",
     "idx_cerefox_chunks_document",
     "idx_cerefox_docs_metadata",
-    "idx_cerefox_docs_project",
     "idx_cerefox_docs_hash",
+    "idx_cerefox_document_projects_doc",
+    "idx_cerefox_document_projects_project",
 ]
 
 
@@ -105,7 +111,13 @@ def check_indexes(cur: psycopg2.extensions.cursor) -> list[str]:
 
 def get_row_counts(cur: psycopg2.extensions.cursor) -> dict[str, int]:
     counts: dict[str, int] = {}
-    for table in ("cerefox_projects", "cerefox_documents", "cerefox_chunks"):
+    for table in (
+        "cerefox_projects",
+        "cerefox_metadata_keys",
+        "cerefox_documents",
+        "cerefox_document_projects",
+        "cerefox_chunks",
+    ):
         try:
             cur.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
             counts[table] = cur.fetchone()[0]

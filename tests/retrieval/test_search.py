@@ -44,7 +44,7 @@ def _make_row(
         "score": score,
         "doc_title": doc_title,
         "doc_source": "file",
-        "doc_project_id": None,
+        "doc_project_ids": [],
         "doc_metadata": {},
     }
 
@@ -62,6 +62,7 @@ def _make_doc_row(
         "doc_title": doc_title,
         "doc_source": "file",
         "doc_metadata": {},
+        "doc_project_ids": [],
         "best_score": best_score,
         "best_chunk_heading_path": ["My Document", "Introduction"],
         "full_content": full_content,

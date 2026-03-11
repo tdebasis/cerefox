@@ -1,0 +1,40 @@
+{#
+  Shared Jinja2 macros for Cerefox templates.
+  Import with:  {% from "macros.html" import action_button %}
+#}
+
+{#
+  action_button — renders a consistent button or link-as-button.
+
+  Parameters
+  ----------
+  label    Required. Button text content.
+  href     If provided, renders <a role="button">; otherwise renders <button>.
+  variant  Visual style:
+             "primary"   filled primary — main form submit actions (default)
+             "secondary" outline secondary — cancel / back / browse actions
+             "edit"      outline (primary colour) — edit navigation
+             "danger"    outline contrast — destructive / delete actions
+  size     "sm" → compact for table/list row actions.
+           Omit (None) → normal inline width, same height as other form controls.
+  submit   True (default) → type="submit" on <button>; False → type="button".
+           Ignored when href is set (links are always navigation).
+  confirm  If set, adds onclick="return confirm('…')" to require user confirmation.
+           Single quotes in the message are escaped automatically.
+#}
+{% macro action_button(label, href=None, variant="primary", size=None, submit=True, confirm=None) -%}
+{%- set _cls_map = {
+  "primary":   "",
+  "secondary": "outline secondary",
+  "edit":      "outline",
+  "danger":    "outline contrast",
+} -%}
+{%- set _base = _cls_map.get(variant, "") -%}
+{%- set _sz   = "btn-sm" if size == "sm" else "btn-inline" -%}
+{%- set _cls  = [_base, _sz] | reject("equalto", "") | join(" ") -%}
+{%- if href -%}
+<a href="{{ href }}" role="button" class="{{ _cls }}"{% if confirm %} onclick="return confirm('{{ confirm | replace("'", "\\'") }}')"{% endif %}>{{ label }}</a>
+{%- else -%}
+<button type="{{ 'submit' if submit else 'button' }}" class="{{ _cls }}"{% if confirm %} onclick="return confirm('{{ confirm | replace("'", "\\'") }}')"{% endif %}>{{ label }}</button>
+{%- endif -%}
+{%- endmacro %}

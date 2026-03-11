@@ -1,0 +1,8 @@
+<button hx-get="/document/{{ document_id }}/content-hide?chars={{ total_chars }}"
+        hx-target="#doc-content" hx-swap="innerHTML"
+        class="outline secondary btn-sm" style="margin-bottom:0.75rem;">
+  Hide content
+</button>
+<article style="margin-top:0.5rem;">
+  <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.6;margin:0;">{{ full_content }}</pre>
+</article>

@@ -9,22 +9,19 @@ Cerefox exposes its knowledge base through **Supabase MCP** — any agent that s
 - Supabase project set up (see `setup-supabase.md`)
 - Schema and RPCs deployed (`python scripts/db_deploy.py`)
 - Some content ingested (`cerefox ingest my-notes.md`)
+- Your **project ref**: visible in Supabase → Connect → MCP tab (format: `abcdefghijklmnop`)
+- A **Personal Access Token** (PAT): create one at
+  `https://supabase.com/dashboard/account/tokens` — name it `cerefox`
+
+> **PAT vs service_role key**: The PAT is a *platform-level* account token used to authenticate
+> the MCP server. It is different from the project's anon/service_role API keys, which are for
+> direct database access only.
 
 ---
 
-## Supabase MCP (Recommended)
+## Claude Desktop (chat)
 
-Supabase provides a first-class MCP server that exposes all your database functions (including Cerefox's RPCs) as tools. This is the zero-infrastructure path.
-
-### Step 1 — Get your Supabase credentials
-
-You need:
-- **Project ref**: found in your Supabase project URL (`https://app.supabase.com/project/<ref>`)
-- **Service role key**: Project Settings → API → `service_role` key
-
-### Step 2 — Configure Claude Desktop (or any MCP client)
-
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
@@ -34,28 +31,59 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
       "args": [
         "-y",
         "@supabase/mcp-server-supabase@latest",
-        "--supabase-url", "https://<your-project-ref>.supabase.co",
-        "--supabase-key", "<your-service-role-key>"
-      ]
+        "--project-ref", "<your-project-ref>"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "<your-personal-access-token>"
+      }
     }
   }
 }
 ```
 
-Restart Claude Desktop. The Supabase MCP server will now expose all Cerefox RPCs as callable tools.
+**Notes:**
+- The `--supabase-url` and `--supabase-key` flags were **removed** from
+  `@supabase/mcp-server-supabase@latest`. Do not include them — Claude Desktop will fail to start.
+- `SUPABASE_ACCESS_TOKEN` is your PAT (from the account tokens page), not the service_role key.
+- Merge the `mcpServers` block into your existing `claude_desktop_config.json` as a top-level key
+  alongside any existing keys (e.g. `preferences`). Do not wrap it in an extra `{}`.
+- Restart Claude Desktop fully (Cmd+Q, not just close the window) after saving.
 
-### Step 3 — Verify the tools are available
+---
 
-In Claude, ask: *"What Supabase tools do you have available?"*
+## Claude Code (CLI)
 
-You should see:
-- `cerefox_hybrid_search` — recommended default for chunk-level results
-- `cerefox_fts_search` — keyword-only search
-- `cerefox_semantic_search` — vector-only search
-- `cerefox_search_docs` — document-level search (returns full notes, not chunks)
-- `cerefox_reconstruct_doc` — fetch full document by ID
-- `cerefox_context_expand` — expand chunk results with neighbouring chunks
-- `cerefox_save_note` — quick note capture from agents
+```bash
+# Add the MCP server with PAT authentication
+claude mcp add --scope user --transport http supabase \
+  "https://mcp.supabase.com/mcp?project_ref=<your-project-ref>" \
+  --header "Authorization: Bearer <your-personal-access-token>"
+
+# Verify — should show "connected", not "needs authentication"
+claude mcp list
+```
+
+Use `--scope user` so the server is available across all your projects.
+
+---
+
+## Verifying the integration
+
+Once connected, test with these prompts:
+
+**Check what tools are available:**
+> "What Supabase tools do you have available?"
+
+**Verify the Cerefox schema:**
+> "List all tables in my Supabase database that start with 'cerefox'."
+
+Expected: `cerefox_documents`, `cerefox_chunks`, `cerefox_projects`,
+`cerefox_document_projects`, `cerefox_metadata_keys`, `cerefox_migrations`
+
+**Run a keyword search:**
+> "Call `cerefox_fts_search` with `p_query_text='second brain'` and `p_match_count=3`."
+
+FTS doesn't require an embedding, so it works immediately as a smoke test.
 
 ---
 
@@ -65,7 +93,8 @@ You should see:
 
 Ask Claude to use the tools directly:
 
-> "Search my knowledge base for notes about project planning. Use `cerefox_hybrid_search` with the query 'project planning'."
+> "Search my knowledge base for notes about project planning. Use `cerefox_hybrid_search`
+> with the query 'project planning'."
 
 Or set up a system prompt so Claude searches automatically:
 
@@ -83,29 +112,31 @@ Claude (or any agent) can capture information directly:
 ```
 Tool: cerefox_save_note
 Parameters:
-  p_title: "Meeting notes — 2026-03-08"
+  p_title: "Meeting notes — 2026-03-10"
   p_content: "# Meeting notes\n\nDiscussed Q1 roadmap..."
   p_source: "agent"
   p_metadata: {"agent_name": "claude", "tags": ["meeting"]}
 ```
 
-> **Note**: `cerefox_save_note` creates a document record immediately but does **not** embed or chunk the content. Run `cerefox ingest` afterwards for the note to become searchable.
+> **Note**: `cerefox_save_note` creates a document record immediately but does **not** embed
+> or chunk the content. Run `cerefox ingest` afterwards for the note to become searchable.
 
 ---
 
 ## Cursor IDE
 
-Cursor supports MCP via `cursor-mcp` or direct Supabase MCP integration.
-
-1. Install the Supabase MCP extension or configure it in Cursor settings.
-2. Provide the same Supabase URL + service role key.
-3. Cursor will expose the Cerefox RPCs as context tools in your AI chat.
+1. Open **Cursor Settings** → **MCP** → **Add MCP Server**
+2. Choose **HTTP** transport, enter the Supabase MCP URL:
+   ```
+   https://mcp.supabase.com/mcp?project_ref=<your-project-ref>
+   ```
+3. Add the Authorization header with your PAT.
 
 ---
 
 ## Custom agents (Python SDK)
 
-Use the Cerefox Python client directly:
+Use the Cerefox Python client directly for scripted or embedded agents:
 
 ```python
 from cerefox.config import Settings
@@ -127,7 +158,11 @@ for hit in resp.results:
 
 ## RPC Reference
 
-All RPCs are in `src/cerefox/db/rpcs.sql`.  Every search RPC returns:
+All RPCs are defined in `src/cerefox/db/rpcs.sql` and verified deployed to the live database.
+
+### Search RPCs
+
+Every chunk-level search RPC returns:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -141,22 +176,12 @@ All RPCs are in `src/cerefox/db/rpcs.sql`.  Every search RPC returns:
 | `score` | FLOAT | Relevance score (higher = more relevant) |
 | `doc_title` | TEXT | Parent document title |
 | `doc_source` | TEXT | Origin: `"file"`, `"paste"`, `"agent"` |
-| `doc_project_id` | UUID | Project UUID (nullable) |
+| `doc_project_ids` | UUID[] | Project UUIDs assigned to the document |
 | `doc_metadata` | JSONB | Document metadata |
 
-### `cerefox_hybrid_search`
+#### `cerefox_fts_search`
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `p_query_text` | TEXT | required | Query string for FTS |
-| `p_query_embedding` | VECTOR(768) | required | Query embedding |
-| `p_match_count` | INT | 10 | Results to return |
-| `p_alpha` | FLOAT | 0.7 | Semantic weight (0=FTS, 1=semantic) |
-| `p_use_upgrade` | BOOL | false | Use upgrade embedding column |
-| `p_project_id` | UUID | null | Filter by project |
-| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity. Chunks that matched the FTS `@@` operator always pass through regardless of their vector score. Only vector-only results are filtered. When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
-
-### `cerefox_fts_search`
+Full-text keyword search. Does not require an embedding model.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -164,25 +189,85 @@ All RPCs are in `src/cerefox/db/rpcs.sql`.  Every search RPC returns:
 | `p_match_count` | INT | 10 | Results to return |
 | `p_project_id` | UUID | null | Filter by project |
 
-### `cerefox_semantic_search`
+#### `cerefox_semantic_search`
+
+Vector similarity search. Requires a pre-computed query embedding.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `p_query_embedding` | VECTOR(768) | required | Query embedding |
 | `p_match_count` | INT | 10 | Results to return |
-| `p_use_upgrade` | BOOL | false | Use upgrade embedding |
+| `p_use_upgrade` | BOOL | false | Use upgrade embedding column |
 | `p_project_id` | UUID | null | Filter by project |
-| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity. All results are filtered by this threshold. When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity. When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
 
-### `cerefox_reconstruct_doc`
+#### `cerefox_hybrid_search`
+
+Combines FTS and semantic search via linear alpha blending. Two overloads (with/without `p_project_id`).
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `p_query_text` | TEXT | required | Query string for FTS |
+| `p_query_embedding` | VECTOR(768) | required | Query embedding |
+| `p_match_count` | INT | 10 | Results to return |
+| `p_alpha` | FLOAT | 0.7 | Semantic weight (0=FTS only, 1=semantic only) |
+| `p_use_upgrade` | BOOL | false | Use upgrade embedding column |
+| `p_project_id` | UUID | null | Filter by project |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity (FTS matches always pass through). When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
+
+#### `cerefox_search_docs`
+
+Document-level search. Runs hybrid search internally, deduplicates by document (keeping the
+best-scoring chunk per document), then returns up to `p_match_count` **distinct documents**
+with their full reconstructed content. Two overloads (with/without `p_project_id`).
+
+Use this when you want complete notes rather than isolated chunks.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `p_query_text` | TEXT | required | Query string for FTS |
+| `p_query_embedding` | VECTOR(768) | required | Query embedding |
+| `p_match_count` | INT | 5 | Max documents to return |
+| `p_alpha` | FLOAT | 0.7 | Semantic weight |
+| `p_project_id` | UUID | null | Filter by project |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity |
+
+Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `best_score`,
+`best_chunk_heading_path`, `full_content`, `chunk_count`, `total_chars`
+
+---
+
+### Document RPCs
+
+#### `cerefox_reconstruct_doc`
+
+Fetch a full document by ID, concatenating all chunks in order.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `p_document_id` | UUID | Document to reconstruct |
 
-Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `full_content`, `chunk_count`, `total_chars`
+Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `full_content`,
+`chunk_count`, `total_chars`
 
-### `cerefox_save_note`
+#### `cerefox_context_expand`
+
+Small-to-big retrieval: given a set of chunk IDs, returns those chunks **plus their immediate
+neighbours** (±`p_window_size` chunks within the same document). Use after chunk-level search
+to recover surrounding context without fetching the full document.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `p_chunk_ids` | UUID[] | required | Array of chunk UUIDs from search results |
+| `p_window_size` | INT | 1 | Chunks to expand in each direction |
+
+Returns: `chunk_id`, `document_id`, `chunk_index`, `title`, `content`, `heading_path`,
+`heading_level`, `doc_title`, `is_seed` (TRUE for the original seed chunks)
+
+#### `cerefox_save_note`
+
+Create a document record directly from an agent without going through the ingestion pipeline.
+The note is stored but **not embedded** — run `cerefox ingest` to make it searchable.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -194,36 +279,37 @@ Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `full_content
 
 Returns: `id`, `title`, `created_at`
 
-### `cerefox_search_docs`
+---
 
-Document-level search. Runs hybrid search internally, deduplicates by document (keeping the best-scoring chunk per document), then returns up to `p_match_count` **distinct documents** with their full reconstructed content.
+### Metadata RPCs
 
-Use this when you want complete notes rather than isolated chunks — ideal for personal knowledge bases where full context is more valuable than pinpoint precision.
+#### `cerefox_upsert_metadata_key`
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `p_query_text` | TEXT | required | Query string for FTS |
-| `p_query_embedding` | VECTOR(768) | required | Query embedding |
-| `p_match_count` | INT | 5 | Max documents to return |
-| `p_alpha` | FLOAT | 0.7 | Semantic weight (0=FTS, 1=semantic) |
-| `p_project_id` | UUID | null | Filter by project |
-| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity (see `cerefox_hybrid_search` note above) |
+Register or update a metadata key in the key registry.
 
-Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `best_score`, `best_chunk_heading_path`, `full_content`, `chunk_count`, `total_chars`
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `p_key` | TEXT | Key name (snake_case) |
+| `p_label` | TEXT | Human-readable label (optional) |
+| `p_description` | TEXT | Description (optional) |
 
-### `cerefox_context_expand`
+#### `cerefox_delete_metadata_key`
 
-Small-to-big retrieval: given a set of chunk IDs from a search result, returns those chunks **plus their immediate neighbours** (±`p_window_size` chunks within the same document). Use this after chunk-level search to recover more surrounding context without fetching the full document.
+Remove a key from the registry.
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `p_chunk_ids` | UUID[] | required | Array of chunk UUIDs from search results |
-| `p_window_size` | INT | 1 | Chunks to expand in each direction |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `p_key` | TEXT | Key to remove |
 
-Returns: `chunk_id`, `document_id`, `chunk_index`, `title`, `content`, `heading_path`, `heading_level`, `doc_title`, `is_seed` (TRUE for the original seed chunks)
+#### `cerefox_list_metadata_keys`
+
+List all registered metadata keys. No parameters. Returns: `key`, `label`, `description`,
+`created_at`, `updated_at`.
 
 ---
 
 ## Response size
 
-Cerefox's default `max_response_bytes = 65000` matches the Supabase MCP limit. If you're using a different MCP client with a lower limit, reduce it via `CEREFOX_MAX_RESPONSE_BYTES` in your `.env`.
+Cerefox's default `max_response_bytes = 65000` matches the Supabase MCP limit. If you're
+using a different MCP client with a lower limit, reduce it via `CEREFOX_MAX_RESPONSE_BYTES`
+in your `.env`.

@@ -1,0 +1,24 @@
+<button hx-get="/document/{{ document_id }}/chunks-hide?n={{ chunks | length }}"
+        hx-target="#doc-chunks" hx-swap="innerHTML"
+        class="outline secondary btn-sm" style="margin-bottom:0.75rem;">
+  Hide chunks
+</button>
+{% if chunks %}
+  {% for chunk in chunks %}
+  <div class="chunk-card">
+    <div class="breadcrumb">
+      {% for part in chunk.heading_path %}
+      <span>{{ part }}</span>
+      {% endfor %}
+      {% if not chunk.heading_path %}
+      <span style="color:var(--pico-muted-color);">(preamble)</span>
+      {% endif %}
+    </div>
+    <pre style="white-space:pre-wrap;font-size:0.85rem;line-height:1.5;margin:0.5rem 0 0;">{{ chunk.content }}</pre>
+  </div>
+  {% endfor %}
+{% else %}
+<div class="empty-state" style="padding:1.5rem;">
+  <p>This document has no chunks. Re-ingest to index it.</p>
+</div>
+{% endif %}

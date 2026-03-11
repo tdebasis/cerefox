@@ -46,8 +46,15 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] Relevance feedback loop (mark results as relevant/irrelevant to improve ranking)
 
 ### Web UI
+- [ ] Pagination for document lists — Browse project view (`/search?project_id=X` with no query) currently caps at 100 docs; add page controls or infinite-scroll when project grows large
 - [ ] Metadata entry on ingest form (key/value editor or raw JSON textarea) — CLI supports --metadata already, web UI doesn't expose it
-- [ ] Collapse "Full content" section on document page into a `<details>` toggle — currently always visible which is noisy for long documents
+- [ ] ~~Collapse "Full content" section~~ — done: HTMX Show/Hide button, same pattern as Chunks
+- [ ] **"No Project Assigned" dashboard tile** — show a virtual tile in the Projects section for documents not in any project (no row in `cerefox_document_projects`). Needs:
+  - `client.get_unassigned_doc_count()` → single query: `SELECT COUNT(*) FROM cerefox_documents d WHERE NOT EXISTS (SELECT 1 FROM cerefox_document_projects dp WHERE dp.document_id = d.id)`
+  - Browse button → `/search?project_id=__none__` (sentinel value)
+  - Search route: detect `project_id == "__none__"` and call a new `client.list_documents(unassigned_only=True)` that LEFT JOINs the junction table filtering `WHERE dp.project_id IS NULL`
+  - The sentinel `__none__` is safe because real Supabase UUIDs are `xxxxxxxx-xxxx-…` format and can never equal a plain string
+  - Template: render the tile as visually distinct from real projects (e.g., dashed border or muted color) so users can tell it's a virtual category
 - [ ] Search-as-you-type with HTMX
 - [ ] Chunk boundary visualization in document viewer
 - [ ] Embedding similarity heatmap (visualize chunk relationships)

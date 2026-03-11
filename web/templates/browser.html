@@ -22,14 +22,14 @@
     </select>
     {% endif %}
     <button type="submit">
-      <span id="search-spinner" class="htmx-indicator">⟳</span> Search
+      <span id="search-spinner" class="htmx-indicator">…</span> Search
     </button>
   </div>
   <input type="hidden" name="count" value="{{ count }}">
 </form>
 
 <div id="results">
-  {% if query %}
+  {% if query or project_id %}
     {% include "partials/search_results.html" %}
   {% else %}
   <div class="empty-state">

@@ -31,6 +31,7 @@ def test_settings() -> Settings:
             "CEREFOX_MAX_CHUNK_CHARS": "4000",
             "CEREFOX_MIN_CHUNK_CHARS": "100",
             "CEREFOX_MAX_RESPONSE_BYTES": "65000",
+            "CEREFOX_METADATA_STRICT": "true",
             "CEREFOX_LOG_LEVEL": "DEBUG",
         },
         clear=False,
@@ -92,7 +93,7 @@ def sample_chunk_row() -> dict:
         "score": 0.87,
         "doc_title": "AI Research Notes",
         "doc_source": "file",
-        "doc_project_id": None,
+        "doc_project_ids": [],
         "doc_metadata": {"tags": ["ai", "research"]},
     }
 

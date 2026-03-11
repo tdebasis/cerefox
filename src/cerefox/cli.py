@@ -149,8 +149,8 @@ def ingest(
             f"   Chunks      : {result.chunk_count}\n"
             f"   Total chars : {result.total_chars:,}"
         )
-        if result.project_id:
-            click.echo(f"   Project ID  : {result.project_id}")
+        if result.project_ids:
+            click.echo(f"   Project IDs : {', '.join(result.project_ids)}")
 
 
 # ── ingest-dir ────────────────────────────────────────────────────────────────
@@ -375,6 +375,65 @@ def list_projects() -> None:
     for proj in projects:
         click.echo(f"{proj['id']:<38}  {proj['name']}")
     click.echo(f"\n{len(projects)} project(s).")
+
+
+# ── metadata-keys ─────────────────────────────────────────────────────────────
+
+
+@cli.group("metadata-keys")
+def metadata_keys() -> None:
+    """Manage the metadata key registry."""
+
+
+@metadata_keys.command("list")
+def metadata_keys_list() -> None:
+    """List all registered metadata keys."""
+    settings = Settings()
+    client = _get_client(settings)
+    keys = client.list_metadata_keys()
+
+    if not keys:
+        click.echo("No metadata keys registered. Use 'cerefox metadata-keys add' to add one.")
+        return
+
+    click.echo(f"{'Key':<30}  {'Label':<25}  Description")
+    click.echo("─" * 80)
+    for k in keys:
+        click.echo(
+            f"{k['key']:<30}  {(k.get('label') or '—'):<25}  {k.get('description') or '—'}"
+        )
+    click.echo(f"\n{len(keys)} key(s) registered.")
+
+
+@metadata_keys.command("add")
+@click.argument("key")
+@click.option("--label", "-l", default=None, help="Human-readable label.")
+@click.option("--description", "-d", default=None, help="Description / usage notes.")
+def metadata_keys_add(key: str, label: str | None, description: str | None) -> None:
+    """Add or update a metadata key in the registry."""
+    settings = Settings()
+    client = _get_client(settings)
+    result = client.upsert_metadata_key(
+        key=key.strip().lower().replace(" ", "_"),
+        label=label,
+        description=description,
+    )
+    click.echo(f"✓  Registered key: {result['key']}")
+
+
+@metadata_keys.command("delete")
+@click.argument("key")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
+def metadata_keys_delete(key: str, yes: bool) -> None:
+    """Remove a metadata key from the registry."""
+    settings = Settings()
+    client = _get_client(settings)
+
+    if not yes:
+        click.confirm(f"Remove metadata key '{key}' from the registry?", default=False, abort=True)
+
+    client.delete_metadata_key(key)
+    click.echo(f"✓  Removed key: {key}")
 
 
 # ── web ───────────────────────────────────────────────────────────────────────
