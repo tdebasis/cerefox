@@ -40,7 +40,7 @@ Cerefox uses cloud-based embedding APIs. Local models (mpnet, Ollama) are not su
 | `CEREFOX_OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embedding model. |
 | `CEREFOX_OPENAI_EMBEDDING_DIMENSIONS` | `768` | Output dimensions. Must match the database schema (VECTOR(768)). |
 
-**Cost**: `text-embedding-3-small` at 768 dimensions costs approximately $0.02/1M tokens — roughly $0.10–$0.30/month for a typical personal knowledge base.
+For cost estimates see `docs/guides/operational-cost.md`.
 
 ### Fireworks AI (alternative, lower cost)
 

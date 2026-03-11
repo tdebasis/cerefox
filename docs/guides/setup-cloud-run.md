@@ -91,14 +91,11 @@ Cloud Run performs a zero-downtime rolling update.
 
 ---
 
-## Cost estimate
+## Cost
 
-For personal use:
-- Cloud Run: ~$0/month (well within free tier for low traffic)
-- Container Registry: ~$0.02/GB/month for the image (~1 GB)
-- Supabase: Free tier covers personal use
-
-Total: **effectively free** for a single-user knowledge base.
+For a typical single-user personal knowledge base, Cloud Run comfortably fits within its
+always-free tier limits. The main variable expense is OpenAI embedding calls, shared with
+all other deployment options. See `docs/guides/operational-cost.md` for a full breakdown.
 
 ---
 

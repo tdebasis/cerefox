@@ -59,7 +59,7 @@ CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox
 CEREFOX_SUPABASE_URL=
 CEREFOX_SUPABASE_KEY=
 
-# OpenAI API key for embeddings (text-embedding-3-small, ~$0.10-0.30/month)
+# OpenAI API key for embeddings (text-embedding-3-small)
 OPENAI_API_KEY=sk-...
 ```
 

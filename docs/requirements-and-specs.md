@@ -12,7 +12,7 @@ Cerefox is a **cloud-native personal knowledge backend** — it stores, indexes,
 
 - **Owned**: all data lives in infrastructure the user controls (Supabase or self-hosted Postgres)
 - **Agent-accessible**: any AI agent (Claude, ChatGPT, Cursor, custom agents, OpenClaw) can search and retrieve from Cerefox via MCP, from anywhere
-- **Cheap**: operates on Supabase free tier with near-zero ongoing cost (OpenAI embedding API ~$0.10–0.30/month)
+- **Cheap**: operates on Supabase free tier with low ongoing cost (cloud embeddings are the only variable expense)
 - **Open source**: MIT license, designed for personal use but shareable
 
 ### 1.0 What Cerefox Is — and Is Not
@@ -34,7 +34,7 @@ Any AI agent, anywhere, searches via MCP
 
 **Cerefox's unique position** in the ecosystem:
 - The only *open source*, *self-hosted*, *MCP-native* knowledge backend
-- Near-zero per-query cost (Supabase free tier + OpenAI embedding API)
+- Low per-query cost (Supabase free tier + low-cost cloud embedding API)
 - Owner-controlled: no vendor reads your data, no subscription required
 - Agents are first-class citizens on both sides: they can read *and* write
 
@@ -190,7 +190,7 @@ Scripts that a developer or operator can run to set up, update, and maintain the
 
 | ID | Requirement |
 |----|-------------|
-| NFR-1.1 | Operate at near-zero cost: Supabase free tier + OpenAI embedding API (~$0.10–0.30/month) |
+| NFR-1.1 | Operate at low cost: Supabase free tier + cloud embedding API (see `docs/guides/operational-cost.md`) |
 | NFR-1.2 | Embedding cost is the only ongoing API cost for core functionality |
 | NFR-1.3 | Alternative cloud embedders (Fireworks AI) are supported as drop-in replacements |
 

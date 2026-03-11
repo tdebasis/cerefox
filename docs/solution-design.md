@@ -234,9 +234,9 @@ class Embedder(Protocol):
 
 | Embedder | Dimensions | Cost | Speed | Quality | Use Case |
 |----------|-----------|------|-------|---------|----------|
-| OpenAI text-embedding-3-small | 768 | ~$0.10–0.30/month | Fast | Good | Default primary |
-| Fireworks AI (nomic-embed-text) | 768 | API cost | Fast | Good | Alternative primary |
-| Vertex text-embedding-005 | 768 | API cost | Fast | Best | Future upgrade |
+| OpenAI text-embedding-3-small | 768 | Low (per token) | Fast | Good | Default primary |
+| Fireworks AI (nomic-embed-text) | 768 | Low (per token) | Fast | Good | Alternative primary |
+| Vertex text-embedding-005 | 768 | Per token | Fast | Best | Future upgrade |
 
 ### 4.3 Dual Embedding Strategy
 

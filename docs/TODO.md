@@ -140,7 +140,7 @@ Record important decisions here for future reference.
 | 2026-03-07 | JSONB for metadata | Evolvable without schema changes |
 | 2026-03-07 | FastAPI + Jinja2 + HTMX for web UI | Lightweight, no JS build step, still interactive |
 | 2026-03-07 | Supabase MCP as primary agent access | Zero custom server needed, agents get direct RPC access |
-| 2026-03-07 | Cloud-only embeddings (OpenAI API) | Eliminates local model complexity (no PyTorch, no platform-specific wheels); ~$0.10–0.30/month for personal use |
+| 2026-03-07 | Cloud-only embeddings (OpenAI API) | Eliminates local model complexity (no PyTorch, no platform-specific wheels); low per-use cost suitable for personal use |
 | 2026-03-07 | No predefined project/category taxonomy | Open source project — users define their own categories |
 | 2026-03-07 | Tests written alongside code (not deferred) | Prevents regression accumulation; easier to test small units |
 | 2026-03-07 | Numbered SQL migration files | Idempotent, trackable schema evolution |

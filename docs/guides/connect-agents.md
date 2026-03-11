@@ -369,8 +369,8 @@ In the action's **Authentication** settings:
 Save the GPT. In a new chat, ask:
 > "Search my knowledge base for 'second brain'."
 
-> **Cost**: GPT Actions are free with ChatGPT Plus. Each Edge Function call uses a small amount
-> of OpenAI API credits for embedding (~$0.00002 per query).
+> **Cost**: GPT Actions are free with ChatGPT Plus. Each search call uses a small amount of
+> OpenAI API credits for embedding the query. See `docs/guides/operational-cost.md`.
 
 ---
 

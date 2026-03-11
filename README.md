@@ -19,7 +19,7 @@ Cerefox is a self-hosted knowledge base for individuals who want to:
 - **Search semantically** — hybrid full-text + vector search finds relevant notes even with fuzzy queries
 - **Connect AI agents** — Claude, Cursor, and any MCP-compatible agent can read and write your knowledge base
 - **Ingest anything** — markdown files, PDFs, DOCX, or paste directly from the CLI or web UI
-- **Keep it cheap** — Supabase free tier + OpenAI embedding API (~$0.10–0.30/month)
+- **Keep it cheap** — Supabase free tier + low-cost cloud embeddings; see `docs/guides/operational-cost.md`
 
 ---
 
@@ -144,6 +144,7 @@ For cloud ChatGPT, use the Supabase Edge Functions as GPT Actions. Full guide: `
 | `docs/guides/setup-local.md` | Local Docker setup |
 | `docs/guides/ops-scripts.md` | Backup, restore, migrate |
 | `docs/guides/setup-cloud-run.md` | Google Cloud Run deployment |
+| `docs/guides/operational-cost.md` | Cost breakdown for all deployment options |
 | `docs/guides/contributing.md` | Adding embedders, converters, commands |
 
 ---
