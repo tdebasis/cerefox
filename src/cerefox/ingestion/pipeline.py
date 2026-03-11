@@ -46,6 +46,7 @@ class IngestResult:
     chunk_count: int
     total_chars: int
     skipped: bool       # True when the document was already present (hash match)
+    reindexed: bool = False  # True when chunks were re-embedded (content changed on update)
     project_ids: list[str] = field(default_factory=list)
 
 
@@ -227,20 +228,58 @@ class IngestionPipeline:
         if existing is None:
             raise ValueError(f"Document {document_id!r} not found")
 
-        # ── Hash deduplication (guard against collision with OTHER docs) ───
+        # ── Hash check ─────────────────────────────────────────────────────
         new_hash = _hash(text)
-        collision = self._client.get_document_by_hash(new_hash)
-        if collision is not None and collision["id"] != document_id:
-            raise ValueError(
-                f"Identical content already exists as document {collision['title']!r}. "
-                "Edit that document or change the content before saving."
-            )
+        content_unchanged = new_hash == existing.get("content_hash")
+
+        # Guard against collision with a *different* document.
+        if not content_unchanged:
+            collision = self._client.get_document_by_hash(new_hash)
+            if collision is not None and collision["id"] != document_id:
+                raise ValueError(
+                    f"Identical content already exists as document {collision['title']!r}. "
+                    "Edit that document or change the content before saving."
+                )
 
         # ── Validate metadata ──────────────────────────────────────────────
         if metadata is not None:
             metadata = self._validate_metadata(metadata)
 
-        # ── Chunk + embed ──────────────────────────────────────────────────
+        # ── Resolve project associations ───────────────────────────────────
+        new_project_ids: list[str] | None = None
+        if project_ids is not None:
+            new_project_ids = [p for p in project_ids if p]
+        elif project_id is not None:
+            new_project_ids = [project_id]
+
+        if content_unchanged:
+            # Content didn't change — skip chunking, embedding, and chunk swap.
+            # Only update title, metadata, and project associations.
+            update_data: dict = {"title": title}
+            if metadata is not None:
+                update_data["metadata"] = metadata
+            self._client.update_document(document_id, update_data)
+
+            if new_project_ids is not None:
+                self._client.assign_document_projects(document_id, new_project_ids)
+                final_project_ids = new_project_ids
+            else:
+                final_project_ids = self._client.get_document_project_ids(document_id)
+
+            chunk_count = existing.get("chunk_count") or 0
+            total_chars = existing.get("total_chars") or 0
+            log.info("Document %s unchanged — skipped reindex (%d chunks)", document_id, chunk_count)
+            return IngestResult(
+                document_id=document_id,
+                title=title,
+                chunk_count=chunk_count,
+                total_chars=total_chars,
+                skipped=False,
+                reindexed=False,
+                project_ids=final_project_ids,
+            )
+
+        # ── Chunk + embed (content changed) ───────────────────────────────
         s = self._settings
         chunks = chunk_markdown(
             text,
@@ -258,7 +297,7 @@ class IngestionPipeline:
         self._client.delete_chunks_for_document(document_id)
 
         # ── Update document record ─────────────────────────────────────────
-        update_data: dict = {
+        update_data = {
             "title": title,
             "content_hash": new_hash,
             "chunk_count": len(chunks),
@@ -271,14 +310,6 @@ class IngestionPipeline:
         log.info("Updated document %s (%d chunks)", document_id, len(chunks))
 
         # ── Update project associations if provided ────────────────────────
-        # Resolve: project_ids takes precedence over project_id.
-        # None = "leave unchanged"; [] = "remove from all projects".
-        new_project_ids: list[str] | None = None
-        if project_ids is not None:
-            new_project_ids = [p for p in project_ids if p]
-        elif project_id is not None:
-            new_project_ids = [project_id]
-
         if new_project_ids is not None:
             self._client.assign_document_projects(document_id, new_project_ids)
             final_project_ids = new_project_ids
@@ -310,6 +341,7 @@ class IngestionPipeline:
             chunk_count=len(chunks),
             total_chars=total_chars,
             skipped=False,
+            reindexed=True,
             project_ids=final_project_ids,
         )
 

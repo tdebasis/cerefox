@@ -61,17 +61,24 @@ def _cached_client() -> CerefoxClient:
 
 @lru_cache
 def _cached_embedder() -> Embedder | None:
-    """Return the configured embedder, or None if not available."""
+    """Return the configured CloudEmbedder, or None if API key is missing."""
     settings = _cached_settings()
     try:
-        if settings.embedder == "ollama":
-            from cerefox.embeddings.ollama_embed import OllamaEmbedder
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-            return OllamaEmbedder(settings.ollama_url, settings.ollama_model)
-        else:
-            from cerefox.embeddings.mpnet import MpnetEmbedder
-
-            return MpnetEmbedder()
+        api_key = settings.get_embedder_api_key()
+        if not api_key:
+            logger.warning(
+                "Embedding API key not set (CEREFOX_OPENAI_API_KEY or "
+                "CEREFOX_FIREWORKS_API_KEY). Semantic search will be unavailable."
+            )
+            return None
+        return CloudEmbedder(
+            api_key=api_key,
+            base_url=settings.get_embedder_base_url(),
+            model=settings.get_embedder_model(),
+            dimensions=settings.get_embedder_dimensions(),
+        )
     except Exception as exc:
         logger.warning("Embedder unavailable: %s", exc)
         return None
@@ -268,10 +275,11 @@ def search_page(
 def document_view(
     request: Request,
     document_id: str,
+    saved: str | None = None,
     client: CerefoxClient = Depends(get_client),
     templates: Jinja2Templates = Depends(get_templates),
 ):
-    ctx: dict[str, Any] = {"active": "search"}
+    ctx: dict[str, Any] = {"active": "search", "saved": saved}
     try:
         doc_row = client.reconstruct_doc(document_id)
         if doc_row is None:
@@ -444,14 +452,15 @@ async def document_edit_submit(
 
     try:
         pipeline = IngestionPipeline(client, embedder, settings)
-        pipeline.update_document(
+        result = pipeline.update_document(
             document_id=document_id,
             text=content.strip(),
             title=title.strip(),
             project_ids=project_ids if project_ids else None,
             metadata=metadata if metadata else None,
         )
-        return RedirectResponse(f"/document/{document_id}", status_code=303)
+        status = "reindexed" if result.reindexed else "saved"
+        return RedirectResponse(f"/document/{document_id}?saved={status}", status_code=303)
     except ValueError as exc:
         doc = client.reconstruct_doc(document_id)
         projects = client.list_projects()

@@ -10,7 +10,7 @@ Single-user, open-source (MIT), designed to be cheap/free to operate.
 
 - **Language**: Python 3.11+
 - **Database**: PostgreSQL 16+ with pgvector (Supabase free tier or local Docker)
-- **Embeddings**: sentence-transformers (all-mpnet-base-v2, 768-dim) as default; Ollama models as upgrade path
+- **Embeddings**: OpenAI `text-embedding-3-small` (768-dim, cloud API); Fireworks AI as alternative; Edge Functions handle embedding server-side for agents
 - **Web framework**: FastAPI (API + web UI backend)
 - **Web UI**: Jinja2 templates + HTMX (lightweight, no JS build step)
 - **CLI**: Click
@@ -42,8 +42,7 @@ cerefox/
 │       │   └── converters.py      # PDF/DOCX → MD (future)
 │       ├── embeddings/
 │       │   ├── base.py            # Embedder protocol/interface
-│       │   ├── mpnet.py           # all-mpnet-base-v2
-│       │   └── ollama_embed.py    # Ollama embedding models
+│       │   └── cloud.py           # OpenAI/Fireworks REST API embedder
 │       ├── ingestion/
 │       │   └── pipeline.py        # Ingest documents → chunks → DB
 │       ├── retrieval/
@@ -95,7 +94,7 @@ cerefox/
 ### Configuration
 - Use pydantic-settings with `.env` file support
 - All config has sensible defaults for local development
-- Key settings: `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`, `CEREFOX_EMBEDDER`, `CEREFOX_MAX_RESPONSE_BYTES`
+- Key settings: `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`, `OPENAI_API_KEY`, `CEREFOX_EMBEDDER`, `CEREFOX_MAX_RESPONSE_BYTES`
 
 ### Testing
 - **Write tests alongside code, not after** — every module added to `src/cerefox/` gets a corresponding test module in `tests/`
@@ -116,7 +115,8 @@ cerefox/
 2. **768-dim vectors** standardized across all embedders — choose models that output 768 dims or use dimensionality reduction
 3. **JSONB metadata** on both documents and chunks — evolvable without schema changes
 4. **Heading-based chunking** (H1 > H2 > H3 fallback) — preserves semantic coherence
-5. **Supabase MCP as primary access layer** — agents call RPCs directly, no custom MCP server needed initially
+5. **Cloud-only embeddings** (OpenAI / Fireworks) — local models (mpnet, Ollama) removed; they caused platform-specific failures and added install complexity
+6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`) — embed server-side so agents never need a local embedding model; agents call via Supabase MCP `invoke_edge_function`
 
 ## Documentation as Source of Truth
 

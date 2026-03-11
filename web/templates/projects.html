@@ -28,7 +28,8 @@
               <div style="display:flex;gap:0.25rem;align-items:center;flex-wrap:nowrap;">
                 {{ action_button("Browse", href="/search?project_id=" ~ proj.id, variant="secondary", size="sm") }}
                 {{ action_button("Edit", href="/projects/" ~ proj.id ~ "/edit", variant="edit", size="sm") }}
-                <form method="post" action="/projects/{{ proj.id }}/delete" style="margin:0;display:contents;">
+                <form method="post" action="/projects/{{ proj.id }}/delete"
+                      style="margin:0;line-height:0;display:inline-flex;align-items:center;">
                   {{ action_button("Delete", variant="danger", size="sm", confirm="Delete project " ~ proj.name ~ "? Documents are kept.") }}
                 </form>
               </div>

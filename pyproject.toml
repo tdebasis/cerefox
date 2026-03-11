@@ -20,21 +20,15 @@ dependencies = [
     "jinja2>=3.1.0",
     "python-multipart>=0.0.9",
     "uvicorn>=0.29.0",
+    "mcp>=1.0.0",
 ]
 
 [project.optional-dependencies]
-mpnet = [
-    "sentence-transformers>=2.7.0",
-    # PyTorch dropped Intel Mac (x86_64) wheels in 2.3.0.
-    # This pin covers Python <=3.12 on Intel Mac; torch 2.2.x has cp311/cp312 wheels.
-    # Python 3.13 + Intel Mac: no torch wheel exists — use Ollama embeddings instead.
-    "torch<2.3.0; sys_platform == 'darwin' and platform_machine == 'x86_64' and python_version < '3.13'",
-]
-ollama = []  # httpx is already a core dep; listed for discoverability
-all = [
-    "sentence-transformers>=2.7.0",
-    "torch<2.3.0; sys_platform == 'darwin' and platform_machine == 'x86_64' and python_version < '3.13'",
-]
+# No optional deps for embeddings — CloudEmbedder uses httpx (already a core dep).
+# File format converters are still optional:
+pdf = ["pypdf>=4.0.0"]
+docx = ["python-docx>=1.1.0"]
+converters = ["pypdf>=4.0.0", "python-docx>=1.1.0"]
 
 [project.scripts]
 cerefox = "cerefox.cli:cli"

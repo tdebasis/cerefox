@@ -175,6 +175,120 @@ Work completed after the v0.1.0 baseline.
 | P.7 | `test-data/` corpus — 6 diverse markdown documents | Done | cerefox-overview, knowledge-management, espresso, ancient-rome, python-concurrency, worldbuilding |
 | P.8 | Web UI: "Documents (full)" search mode | Done | `browser.html` 4th mode option; `routes.py` calls `search_docs()`; `search_results.html` branches on `view` |
 
+---
+
+## Phase 8: Cloud-First Embeddings + Supabase Edge Functions
+
+**Goal**: Replace all local embedding models with cloud API embedders (OpenAI default,
+Fireworks-compatible alternative) and deploy Supabase Edge Functions so any AI agent
+can do real hybrid search without SQL or a local embedder.
+
+### Why
+
+- Local mpnet requires Python + PyTorch — fails on Intel Mac Python 3.13, heavy to install
+- Ollama requires a separate running service
+- Agents calling RPCs via Supabase MCP must pass embeddings themselves; zero-vector
+  workaround produces broken/null scores and arbitrary results
+- Correct solution: move embedding to a server-side layer that agents can call by name
+  (Supabase Edge Function), using the same model for both ingest and query
+
+### Architecture after Phase 8
+
+```
+Ingest:   cerefox ingest file.md → Python CLI → OpenAI API → Supabase (text + 768-dim vector)
+Search:   Agent → Supabase MCP → cerefox-search Edge Function
+                               → OpenAI API (embed query with same model)
+                               → cerefox_hybrid_search RPC → results
+Quick note: Agent → cerefox-ingest Edge Function → OpenAI API → DB
+```
+
+### Key design decisions
+
+- **OpenAI `text-embedding-3-small` with `dimensions=768`** — exactly matches existing
+  VECTOR(768) schema; no migration needed; $0.02/1M tokens (~$0.10–0.30/month for personal use)
+- **One `CloudEmbedder` class** — configurable base_url + model + api_key; covers OpenAI,
+  Fireworks AI (OpenAI-compatible), Together AI, etc. without separate classes
+- **Fireworks**: same class, base_url `https://api.fireworks.ai/inference/v1`,
+  model `nomic-ai/nomic-embed-text-v1.5` (768-dim, OpenAI-compatible endpoint)
+- **No new Python dependencies** — httpx is already a core dep; no torch, no sentence-transformers
+- **`cerefox reindex` CLI command** — re-embeds all existing chunks with the new embedder
+  in-place (preserves document IDs), so existing 14 docs / 186 chunks migrate cleanly
+- **Edge Functions** deployed to Supabase, called via `SUPABASE_ANON_KEY` bearer token;
+  `OPENAI_API_KEY` stored as a Supabase secret
+
+### Schema: no changes required
+
+`embedding_primary VECTOR(768)` already works. `text-embedding-3-small` with
+`dimensions=768` outputs L2-normalised 768-dim vectors. Cosine similarity (pgvector `<=>`)
+works correctly.
+
+### Tasks
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 8.1 | Write `CloudEmbedder` (`src/cerefox/embeddings/cloud.py`) | Done | httpx, OpenAI-compatible `/embeddings` endpoint, batching |
+| 8.2 | Update `config.py` — remove ollama/mpnet settings, add cloud settings | Done | `embedder: Literal["openai","fireworks"]`, `openai_api_key`, `openai_base_url`, `openai_embedding_model`, `openai_embedding_dimensions` |
+| 8.3 | Update `_get_embedder()` factory in `cli.py` and `routes.py` | Done | Both use `CloudEmbedder` with settings-driven base_url/model/key |
+| 8.4 | Remove `mpnet.py` and `ollama_embed.py` | Done | No longer needed; httpx is already core dep |
+| 8.5 | Update `pyproject.toml` — remove mpnet/torch/ollama optional deps | Done | Simpler dependency tree |
+| 8.6 | Add `cerefox reindex` CLI command | Done | Re-embeds all chunks in-place; new `client.update_chunk_embedding()` DB method |
+| 8.7 | Write `supabase/functions/cerefox-search/index.ts` | Done | Accepts text query + optional project_name/match_count/mode; embeds with OpenAI; calls RPC |
+| 8.8 | Write `supabase/functions/cerefox-ingest/index.ts` | Done | Accepts title + content; chunks (heading-aware); embeds; inserts document + chunks |
+| 8.9 | Deploy Edge Functions to Supabase | Done | Via `mcp__supabase__deploy_edge_function` |
+| 8.10 | Update tests — replace mpnet/ollama mocks with CloudEmbedder mocks | Done | Mock httpx calls instead of sentence-transformers |
+| 8.11 | Update `.env.example` | Done | `CEREFOX_EMBEDDER=openai`, `OPENAI_API_KEY=` |
+| 8.12 | Update `docs/guides/connect-agents.md` — Edge Function as primary path | Done | Named tool usage, project-filter pattern, no more SQL |
+| 8.13 | Update `docs/guides/quickstart.md` — OpenAI embedder as default | Done | |
+| 8.14 | Update `docs/guides/configuration.md` | Done | New env vars, removed old ones |
+
+---
+
+## Phase 9: Built-in MCP Server
+
+**Goal**: Ship a proper `cerefox mcp` command that desktop AI clients (Claude Desktop,
+ChatGPT Desktop, Cursor) can launch directly. Fixes the `mcp-server-fetch` dead end
+(GET-only, can't POST authenticated requests).
+
+**Key insight**: The MCP server runs as a local stdio process. Desktop clients launch it
+as a subprocess → full hybrid search. Cloud clients cannot reach a local process → they
+need a deployed remote server (future work) or GPT Actions (ChatGPT only).
+
+### Tasks
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 9.1 | Write `src/cerefox/mcp_server.py` — MCP Python SDK, stdio transport | Done | Exposes `cerefox_search` (doc-level hybrid) and `cerefox_ingest` tools |
+| 9.2 | Add `cerefox mcp` CLI command | Done | `cli.py` → `mcp_server.run()` |
+| 9.3 | Add `mcp>=1.0.0` to `pyproject.toml` dependencies | Done | mcp 1.26.0 installed |
+| 9.4 | Update `docs/guides/connect-agents.md` — `cerefox mcp` as primary path | Done | Local/cloud architecture table, correct system prompt, ChatGPT Desktop + GPT Actions |
+| 9.5 | Update `docs/solution-design.md` section 9 | Done | Built-in server primary, architecture diagram, constraints documented |
+| 9.6 | Update `docs/plan.md`, `quickstart.md`, `setup-supabase.md` | Done | All references to old fetch/invoke_edge_function approach corrected |
+
+**Deliverable**: `cerefox mcp` launches a working MCP server. Claude Desktop, ChatGPT Desktop,
+and Cursor connect to it and get named `cerefox_search` / `cerefox_ingest` tools with full
+hybrid search. Validated live with Claude Desktop.
+
+---
+
+## Progress Log
+
+Record completed milestones here as we go.
+
+| Date | Milestone | Notes |
+|------|-----------|-------|
+| 2026-03-07 | Project kickoff | Created CLAUDE.md, solution design, plan, TODO, requirements |
+| 2026-03-07 | Phase 1 complete | Python project, full schema SQL, search RPCs, DB client, deploy/status scripts, 40 unit tests passing, Supabase setup guide and config reference written |
+| 2026-03-07 | Phase 2 complete | Heading-aware markdown chunker, Embedder protocol, mpnet + Ollama embedders, 52 new tests (92 total passing) |
+| 2026-03-08 | Phase 3 complete | Ingestion pipeline, SHA-256 dedup, Click CLI (ingest/list-docs/delete-doc/list-projects), JSON backup/restore, 50 new tests (142 total passing) |
+| 2026-03-08 | Phase 4 complete | SearchClient (hybrid/fts/semantic/reconstruct), response size management, CLI search command, cerefox_save_note RPC, agent connection guide, 22 new tests (164 total passing) |
+| 2026-03-08 | Phase 5 complete | FastAPI web UI (dashboard/search/ingest/projects/doc-viewer), Jinja2+HTMX+Pico.css, `cerefox web` CLI command, local setup guide, ops-scripts guide, 34 new tests (198 total passing) |
+| 2026-03-08 | Phase 6 complete | PDF+DOCX converters, cerefox_context_expand RPC, cerefox ingest-dir, git backup, 20 new tests (218 total passing) |
+| 2026-03-08 | Phase 7 complete | Dockerfile, docker-compose.yml, Cloud Run guide, README, quickstart, contributing guide, .env.example — v0.1.0 ready |
+| 2026-03-08 | Post-release: document search | cerefox_search_docs RPC deployed; DocResult/DocSearchResponse; web UI Documents mode; test-data corpus; 236 tests passing |
+| 2026-03-11 | Phase 8 complete | CloudEmbedder, config, CLI, Edge Functions deployed; connect-agents.md updated |
+| 2026-03-11 | Phase 9 complete | Built-in MCP server (`cerefox mcp`); validated with Claude Desktop; ChatGPT docs added |
+
 ## Current Focus
 
-**236 tests passing.** Document-level search implemented and deployed to Supabase. Web UI updated with Documents search mode.
+**Phase 9 complete.** Built-in MCP server (`cerefox mcp`) validated with Claude Desktop.
+Next: ChatGPT Desktop validation + GPT Actions setup, then Cloud Run deployment for cloud clients.

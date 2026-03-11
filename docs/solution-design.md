@@ -375,70 +375,94 @@ Rationale:
 
 ## 9. MCP Integration
 
-### 9.1 Supabase MCP (Primary)
+### 9.1 Architecture: Local vs Cloud Agents
 
-Supabase natively exposes Postgres RPCs as MCP tools. This means:
-- Define RPCs in Postgres → automatically available via MCP
-- No custom MCP server needed for V1
-- Any agent that supports MCP can connect to Cerefox
+The MCP integration has two layers, serving different client types:
 
-### 9.2 MCP Tool Inventory
+```
+Desktop clients (Claude Desktop, ChatGPT Desktop, Cursor)
+  └── cerefox mcp (local stdio process)
+        └── Python SDK → Supabase DB + OpenAI embeddings
+              Full hybrid search, cerefox_search + cerefox_ingest tools
 
-| Tool (RPC) | Direction | Description |
-|------------|-----------|-------------|
-| `cerefox_hybrid_search` | Read | Fused FTS + semantic search (chunk-level) |
-| `cerefox_fts_search` | Read | Keyword/exact search |
-| `cerefox_semantic_search` | Read | Pure vector similarity |
-| `cerefox_search_docs` | Read | Document-level hybrid search; returns full notes deduplicated by document |
-| `cerefox_reconstruct_doc` | Read | Reassemble full document from chunks by document ID |
-| `cerefox_context_expand` | Read | Small-to-big: expand chunk results with adjacent neighbours |
-| `cerefox_save_note` | **Write** | Agent saves a note/insight into the knowledge base |
+Cloud clients (claude.ai web)
+  └── Remote Supabase MCP (mcp.supabase.com)
+        └── execute_sql → cerefox_fts_search RPC
+              FTS keyword search only (no server-side embedding)
 
-### 9.3 Agent Write: `cerefox_save_note`
+Cloud ChatGPT (chatgpt.com)
+  └── GPT Actions → cerefox-search Edge Function (HTTP POST)
+        └── OpenAI embed + cerefox_search_docs RPC
+              Full hybrid search via Edge Functions
 
-Agents are first-class contributors to the knowledge base, not just consumers. The write tool lets an agent save a note, research summary, or insight directly — without the user needing to manually ingest it.
-
-**RPC signature (conceptual):**
-```sql
-CREATE OR REPLACE FUNCTION cerefox_save_note(
-  p_title TEXT,
-  p_content TEXT,                    -- Markdown content
-  p_agent_name TEXT,                 -- e.g. 'claude-3-7-sonnet'
-  p_project_name TEXT DEFAULT NULL,  -- optional project association
-  p_tags TEXT[] DEFAULT '{}',        -- optional tags
-  p_agent_session_id TEXT DEFAULT NULL,
-  p_confidence NUMERIC DEFAULT NULL  -- agent's self-assessed confidence (0–1)
-)
-RETURNS UUID  -- returns the new document_id
+Future: deployed remote HTTP MCP server (Cloud Run)
+  └── Any cloud client → full hybrid search
 ```
 
-**How it works:**
-1. Agent calls `cerefox_save_note` with content and its identity
-2. Supabase RPC creates a document record with `source = 'agent'`, `created_by = 'ai-agent'`
-3. Content is chunked and embedded asynchronously (or synchronously in V1)
-4. Returns the document ID for the agent's reference
+**Key constraint**: `cerefox mcp` is a stdio process — it only runs on the local machine.
+Desktop clients launch it as a subprocess. Cloud clients cannot reach it.
 
-**Agent metadata stored:**
-```json
-{
-  "source": "agent",
-  "created_by": "ai-agent",
-  "agent_name": "claude-3-7-sonnet",
-  "agent_session_id": "optional-session-id",
-  "tags": ["summary", "research"],
-  "confidence": 0.9
-}
+### 9.2 Built-in MCP Server (`cerefox mcp`)
+
+`src/cerefox/mcp_server.py` is a proper MCP server using the MCP Python SDK. It is the
+primary integration path for local desktop clients.
+
+**Why not raw Supabase MCP + fetch?**
+The `mcp-server-fetch` package is a web reader (GET-only) — it cannot make authenticated
+POST requests to the Edge Functions. The built-in server solves this by using the Python SDK
+directly, no HTTP gymnastics needed.
+
+**Exposed tools:**
+
+| Tool | Direction | Description |
+|------|-----------|-------------|
+| `cerefox_search` | Read | Document-level hybrid search (FTS + semantic). Returns complete reconstructed documents. Always use this — not chunk-level RPCs. |
+| `cerefox_ingest` | Write | Save a note or document with full chunking + embedding. |
+
+**How `cerefox_search` works internally:**
+1. Embeds the query with `CloudEmbedder` (OpenAI `text-embedding-3-small`)
+2. Calls `cerefox_search_docs` RPC — hybrid FTS + pgvector cosine similarity
+3. Returns up to `match_count` full documents, truncating at `max_response_bytes`
+
+**Recommended system prompt for Claude Desktop:**
+```
+You have access to my personal knowledge base via the cerefox_search tool.
+When answering questions in this session, always call cerefox_search first
+with a relevant query. Cite doc_title for every claim drawn from the knowledge
+base. Use cerefox_ingest to save anything I ask you to save to the knowledge
+base (in md format).
 ```
 
-This metadata makes it easy to later filter agent-contributed content (e.g., "only search human-authored notes") or audit what agents have added.
+### 9.3 Supabase Edge Functions (HTTP, for GPT Actions / scripts)
 
-### 9.4 Custom MCP Server (Future)
+The Edge Functions (`cerefox-search`, `cerefox-ingest`) are deployed to Supabase and callable
+via HTTP POST with an anon key. They are the backend for:
+- ChatGPT cloud GPT Actions
+- curl / scripted access
+- Any HTTP client that can send a POST with custom headers
 
-For enhanced capabilities beyond what Supabase MCP provides:
-- Query embedding computation on the server side (agents don't need their own embedder)
-- Smarter small-to-big context assembly in a single tool call
-- Rate limiting, usage tracking
-- Multi-tool workflows (search + expand + format in one call)
+They are **not** the primary path for local desktop agents (use `cerefox mcp` instead).
+
+### 9.4 Postgres RPCs (for direct SQL access)
+
+All search RPCs remain available for direct SQL execution via the Supabase MCP
+(`execute_sql` tool) or psql. Useful for cloud Claude.ai (FTS keyword search only):
+
+| RPC | Description |
+|-----|-------------|
+| `cerefox_fts_search` | Keyword search, returns chunks |
+| `cerefox_semantic_search` | Vector search, requires pre-computed embedding |
+| `cerefox_hybrid_search` | FTS + vector combined, requires embedding |
+| `cerefox_search_docs` | Document-level hybrid, requires embedding |
+| `cerefox_reconstruct_doc` | Fetch full document by ID |
+| `cerefox_context_expand` | Small-to-big: expand chunks with neighbours |
+| `cerefox_save_note` | Store a note (no chunking/embedding — use `cerefox_ingest` for searchable notes) |
+
+### 9.5 Remote HTTP MCP Server (Future)
+
+Deploying the `cerefox mcp` server to Cloud Run would expose it as a remote MCP endpoint,
+giving cloud clients (claude.ai, any browser-based AI) full hybrid search access. This is
+tracked in `docs/TODO.md`.
 
 ## 10. Deployment Topologies
 

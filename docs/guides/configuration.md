@@ -25,24 +25,40 @@ cp .env.example .env
 
 ## Embeddings
 
+Cerefox uses cloud-based embedding APIs. Local models (mpnet, Ollama) are not supported — they require large downloads, fail on some hardware, and add installation complexity.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CEREFOX_EMBEDDER` | `mpnet` | Which embedder to use for new ingestions. Valid values: `mpnet`, `ollama` |
-| `CEREFOX_OLLAMA_URL` | `http://localhost:11434` | Ollama server base URL. Only used when `CEREFOX_EMBEDDER=ollama` |
-| `CEREFOX_OLLAMA_MODEL` | `nomic-embed-text` | Ollama model name for embeddings. Must produce 768-dim vectors. Only used when `CEREFOX_EMBEDDER=ollama` |
+| `CEREFOX_EMBEDDER` | `openai` | Embedding provider. Valid values: `openai`, `fireworks` |
 
-### Embedder Notes
+### OpenAI (default, recommended)
 
-**`mpnet`** (default):
-- Uses `sentence-transformers/all-mpnet-base-v2`
-- Runs locally, no API cost
-- First run downloads the model (~420MB); cached after that
-- Output: 768-dim normalized vectors
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | `""` | OpenAI API key. Also accepted as `CEREFOX_OPENAI_API_KEY`. Get one at [platform.openai.com/api-keys](https://platform.openai.com/api-keys). |
+| `CEREFOX_OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL. Override for proxies or OpenAI-compatible providers. |
+| `CEREFOX_OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | OpenAI embedding model. |
+| `CEREFOX_OPENAI_EMBEDDING_DIMENSIONS` | `768` | Output dimensions. Must match the database schema (VECTOR(768)). |
 
-**`ollama`**:
-- Requires [Ollama](https://ollama.ai) running locally or on a server
-- Recommended models: `nomic-embed-text` (768-dim), `mxbai-embed-large` (1024-dim, will require dimensionality reduction in future)
-- Pull a model first: `ollama pull nomic-embed-text`
+**Cost**: `text-embedding-3-small` at 768 dimensions costs approximately $0.02/1M tokens — roughly $0.10–$0.30/month for a typical personal knowledge base.
+
+### Fireworks AI (alternative, lower cost)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CEREFOX_FIREWORKS_API_KEY` | `""` | Fireworks AI API key. |
+| `CEREFOX_FIREWORKS_BASE_URL` | `https://api.fireworks.ai/inference/v1` | Fireworks API base URL. |
+| `CEREFOX_FIREWORKS_EMBEDDING_MODEL` | `nomic-ai/nomic-embed-text-v1.5` | Fireworks model. Must natively output 768-dim vectors. |
+
+To use Fireworks:
+```env
+CEREFOX_EMBEDDER=fireworks
+CEREFOX_FIREWORKS_API_KEY=fw_...
+```
+
+### Edge Functions (for agents)
+
+The `cerefox-search` and `cerefox-ingest` Supabase Edge Functions handle embeddings server-side — agents don't need to set up any embedder locally. The Edge Functions read `OPENAI_API_KEY` from the Supabase project's secrets. See `docs/guides/connect-agents.md`.
 
 ---
 
@@ -67,23 +83,21 @@ cp .env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CEREFOX_MAX_RESPONSE_BYTES` | `65000` | Maximum bytes in a single search response. Set to Supabase MCP's limit by default. Reduce if using a custom MCP client with lower limits. |
-| `CEREFOX_MIN_SEARCH_SCORE` | `0.65` | Minimum cosine similarity for hybrid and semantic search results (0.0–1.0). In **hybrid search**, chunks that matched the FTS keyword operator (`@@`) always pass through regardless of their vector score — the threshold only filters vector-only results. In **semantic search**, all results are filtered. The pure **FTS search** mode is unaffected. Increase for stricter precision; decrease for wider recall. |
+| `CEREFOX_MIN_SEARCH_SCORE` | `0.50` | Minimum cosine similarity for hybrid and semantic search results (0.0–1.0). In **hybrid search**, chunks that matched the FTS keyword operator (`@@`) always pass through regardless of their vector score — the threshold only filters vector-only results. In **semantic search**, all results are filtered. The pure **FTS search** mode is unaffected. Increase for stricter precision; decrease for wider recall. |
 
-**Score threshold guidance (all-mpnet-base-v2):**
-
-Sentence-transformer cosine scores are **not** percentage-of-similarity. The score distribution for `all-mpnet-base-v2` is:
+**Score threshold guidance (OpenAI text-embedding-3-small):**
 
 | Score | Meaning |
 |-------|---------|
-| 0.0 – 0.35 | Noise floor — even unrelated sentences land here |
-| 0.35 – 0.55 | Weak/tangential overlap — same domain, different topic |
-| 0.55 – 0.75 | Genuine semantic match — related concepts, paraphrases |
-| 0.75 – 1.0 | High similarity — near-duplicate or very direct answer |
+| 0.0 – 0.20 | Noise floor — unrelated content |
+| 0.20 – 0.45 | Weak/tangential overlap — same domain, different topic |
+| 0.45 – 0.70 | Genuine semantic match — related concepts, paraphrases |
+| 0.70 – 1.0 | High similarity — near-duplicate or very direct answer |
 
 Recommended values:
-- `0.65` (default) — filters noise and weak matches, keeps genuine results
-- `0.55`–`0.60` — wider recall; useful for small corpora or exploratory search
-- `0.75`–`0.80` — high precision; only very close semantic matches
+- `0.50` (default) — filters noise, keeps genuine results
+- `0.40`–`0.45` — wider recall; useful for small corpora or exploratory search
+- `0.70`–`0.80` — high precision; only very close semantic matches
 - `0.0` — disable filtering entirely (returns all RPC results, not recommended)
 
 ---
@@ -116,25 +130,77 @@ CEREFOX_SUPABASE_KEY=eyJhbGciOiJIUzI1NiIs...
 # Required for scripts only
 CEREFOX_DATABASE_URL=postgresql://postgres.abcdefghijkl:MyPassword@aws-0-us-east-1.pooler.supabase.com:5432/postgres
 
-# Embeddings — local default, no API cost
-CEREFOX_EMBEDDER=mpnet
+# Embeddings — OpenAI (default)
+OPENAI_API_KEY=sk-...
 
 # All other settings use defaults
 ```
 
-## Example: Ollama Embedder `.env`
+## Example: Fireworks Embedder `.env`
 
 ```bash
 CEREFOX_SUPABASE_URL=https://abcdefghijkl.supabase.co
 CEREFOX_SUPABASE_KEY=eyJhbGciOiJIUzI1NiIs...
 CEREFOX_DATABASE_URL=postgresql://...
 
-CEREFOX_EMBEDDER=ollama
-CEREFOX_OLLAMA_URL=http://localhost:11434
-CEREFOX_OLLAMA_MODEL=nomic-embed-text
+CEREFOX_EMBEDDER=fireworks
+CEREFOX_FIREWORKS_API_KEY=fw_...
 ```
 
-Ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull nomic-embed-text`) before ingesting.
+---
+
+## Changing the embedding model
+
+Cerefox has **two independent access paths**, each with its own embedding configuration:
+
+| Path | Where embedding happens | Config location |
+|------|------------------------|-----------------|
+| Local MCP server + CLI | Python `CloudEmbedder` | `.env` (`CEREFOX_OPENAI_EMBEDDING_MODEL`, etc.) |
+| Edge Functions (GPT Actions, curl) | TypeScript constants in Edge Function code | Hardcoded in `supabase/functions/*/index.ts` |
+
+When you change the embedding model, **both paths must be updated and kept in sync** — they must use the same model and dimensions, or search results will be incoherent (queries embedded by one model won't match chunks embedded by another).
+
+### Step 1 — Update `.env`
+
+Change `CEREFOX_OPENAI_EMBEDDING_MODEL` and `CEREFOX_OPENAI_EMBEDDING_DIMENSIONS` to the new values.
+
+### Step 2 — Re-embed all stored chunks
+
+```bash
+uv run cerefox reindex
+```
+
+This re-embeds every chunk in the database using the model now configured in `.env`.
+Preserves document IDs and project assignments. Run this before using the new model for searches.
+
+### Step 3 — Update and redeploy the Edge Functions (if you use them)
+
+The Edge Functions have the model hardcoded as TypeScript constants. Edit both files:
+
+```
+supabase/functions/cerefox-search/index.ts   (lines ~29–30)
+supabase/functions/cerefox-ingest/index.ts   (lines ~25–26)
+```
+
+Change:
+```typescript
+const OPENAI_MODEL = "text-embedding-3-small";  // ← update this
+const EMBEDDING_DIMENSIONS = 768;               // ← and this if dimensions change
+```
+
+Then redeploy via the Supabase CLI:
+```bash
+supabase functions deploy cerefox-search
+supabase functions deploy cerefox-ingest
+```
+
+Or redeploy through the Supabase Dashboard → Edge Functions → Deploy.
+
+> **If you only use the local MCP server** (Claude Desktop, ChatGPT Desktop, Cursor), Step 3 is
+> optional — the Edge Functions are only used for GPT Actions and direct HTTP access.
+
+> **Future improvement**: the Edge Functions will be updated to read model config from Supabase
+> secrets, eliminating the need to edit TypeScript and redeploy when the model changes.
 
 ---
 
@@ -143,7 +209,7 @@ Ensure Ollama is running (`ollama serve`) and the model is pulled (`ollama pull 
 Run the status script to verify everything is connected:
 
 ```bash
-python scripts/db_status.py
+uv run python scripts/db_status.py
 ```
 
 If it exits successfully (code 0), your configuration is correct.

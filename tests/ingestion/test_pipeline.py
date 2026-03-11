@@ -465,14 +465,16 @@ class TestClientMetadataKeys:
     @pytest.fixture()
     def client_with_rpc(self) -> MagicMock:
         """Client mock where rpc() is the single point of control."""
+        from unittest.mock import patch
         from cerefox.db.client import CerefoxClient
         from cerefox.config import Settings
 
         client = CerefoxClient.__new__(CerefoxClient)
-        client._settings = Settings(
-            supabase_url="http://fake", supabase_key="fake",
-            database_url="", metadata_strict=True,
-        )
+        with patch.dict("os.environ", {"CEREFOX_EMBEDDER": "openai", "OPENAI_API_KEY": "test-key"}, clear=False):
+            client._settings = Settings(
+                supabase_url="http://fake", supabase_key="fake",
+                database_url="", metadata_strict=True,
+            )
         client._client = None
         # Patch rpc at the instance level
         client.rpc = MagicMock()

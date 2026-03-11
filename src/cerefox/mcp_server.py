@@ -1,0 +1,259 @@
+"""Cerefox MCP server — exposes cerefox_search and cerefox_ingest as named MCP tools.
+
+Run via:
+    cerefox mcp
+
+Claude Desktop config (~/.../claude_desktop_config.json):
+    {
+      "mcpServers": {
+        "cerefox": {
+          "command": "uv",
+          "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+        }
+      }
+    }
+
+The server reads CEREFOX_* settings from .env (same as the CLI).
+No extra credentials or tokens needed — uses the local Python SDK directly.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+import mcp.server.stdio
+import mcp.types as types
+from mcp.server import NotificationOptions, Server
+from mcp.server.models import InitializationOptions
+
+log = logging.getLogger(__name__)
+
+server = Server("cerefox")
+
+
+# ── Lazy dependency initialisation ────────────────────────────────────────────
+
+_deps: dict[str, Any] | None = None
+
+
+def _get_deps() -> dict[str, Any]:
+    global _deps
+    if _deps is not None:
+        return _deps
+
+    from cerefox.config import Settings
+    from cerefox.db.client import CerefoxClient
+    from cerefox.embeddings.cloud import CloudEmbedder
+    from cerefox.ingestion.pipeline import IngestionPipeline
+
+    settings = Settings()
+    client = CerefoxClient(settings)
+    embedder = CloudEmbedder(
+        api_key=settings.get_embedder_api_key(),
+        base_url=settings.get_embedder_base_url(),
+        model=settings.get_embedder_model(),
+        dimensions=settings.get_embedder_dimensions(),
+    )
+    pipeline = IngestionPipeline(client, embedder, settings)
+
+    _deps = {
+        "settings": settings,
+        "client": client,
+        "embedder": embedder,
+        "pipeline": pipeline,
+    }
+    return _deps
+
+
+# ── Tool definitions ───────────────────────────────────────────────────────────
+
+
+@server.list_tools()
+async def list_tools() -> list[types.Tool]:
+    return [
+        types.Tool(
+            name="cerefox_search",
+            description=(
+                "Search the Cerefox personal knowledge base. "
+                "Returns complete documents ranked by hybrid (FTS + semantic) relevance. "
+                "Always call this before answering questions about the user's notes, ideas, "
+                "or stored knowledge."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language search query",
+                    },
+                    "match_count": {
+                        "type": "integer",
+                        "default": 5,
+                        "description": "Maximum number of documents to return",
+                    },
+                    "project_name": {
+                        "type": "string",
+                        "description": "Optional: filter results to a specific project",
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="cerefox_ingest",
+            description=(
+                "Save a note or document to the Cerefox knowledge base. "
+                "Use this when the user asks you to remember something for future conversations."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["title", "content"],
+                "properties": {
+                    "title": {"type": "string", "description": "Document title"},
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown content to store",
+                    },
+                    "project_name": {
+                        "type": "string",
+                        "description": "Optional: assign to a project (created if it doesn't exist)",
+                    },
+                    "source": {
+                        "type": "string",
+                        "default": "agent",
+                        "description": "Origin label (default: 'agent')",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional arbitrary JSON metadata (e.g. tags)",
+                    },
+                },
+            },
+        ),
+    ]
+
+
+# ── Tool execution ─────────────────────────────────────────────────────────────
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    deps = _get_deps()
+    client = deps["client"]
+    embedder = deps["embedder"]
+    pipeline = deps["pipeline"]
+    settings = deps["settings"]
+
+    if name == "cerefox_search":
+        return await _handle_search(client, embedder, settings, arguments)
+    elif name == "cerefox_ingest":
+        return await _handle_ingest(client, pipeline, arguments)
+    else:
+        raise ValueError(f"Unknown tool: {name}")
+
+
+async def _handle_search(
+    client: Any, embedder: Any, settings: Any, arguments: dict
+) -> list[types.TextContent]:
+    query: str = arguments["query"]
+    match_count: int = int(arguments.get("match_count", 5))
+    project_name: str | None = arguments.get("project_name")
+
+    # Resolve project name → ID if provided
+    project_id: str | None = None
+    if project_name:
+        projects = client.list_projects()
+        for p in projects:
+            if p["name"].lower() == project_name.lower():
+                project_id = p["id"]
+                break
+        if project_id is None:
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Project not found: {project_name}",
+                )
+            ]
+
+    # Embed the query
+    embedding = embedder.embed(query)
+
+    # Call the document-level hybrid search RPC
+    rows = client.search_docs(
+        query_text=query,
+        query_embedding=embedding,
+        match_count=match_count,
+        alpha=0.7,
+        project_id=project_id,
+        min_score=settings.min_search_score,
+    )
+
+    if not rows:
+        return [types.TextContent(type="text", text="No results found.")]
+
+    # Format results: full document content with title/score header
+    parts: list[str] = []
+    total_bytes = 0
+    max_bytes = settings.max_response_bytes
+
+    for row in rows:
+        block = f"## {row['doc_title']} (score: {row['best_score']:.3f})\n\n{row['full_content']}"
+        block_bytes = len(block.encode())
+        if total_bytes + block_bytes > max_bytes:
+            parts.append(f"## {row['doc_title']}\n[truncated — response size limit reached]")
+            break
+        parts.append(block)
+        total_bytes += block_bytes
+
+    return [types.TextContent(type="text", text="\n\n---\n\n".join(parts))]
+
+
+async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[types.TextContent]:
+    result = pipeline.ingest_text(
+        text=arguments["content"],
+        title=arguments["title"],
+        source=arguments.get("source", "agent"),
+        project_name=arguments.get("project_name"),
+        metadata=arguments.get("metadata") or {},
+    )
+
+    if result.skipped:
+        msg = f"Skipped (already ingested): {result.title}"
+    else:
+        msg = (
+            f"Ingested: {result.title}\n"
+            f"Document ID: {result.document_id}\n"
+            f"Chunks: {result.chunk_count}\n"
+            f"Total chars: {result.total_chars:,}"
+        )
+        if result.project_ids:
+            msg += f"\nProject IDs: {', '.join(result.project_ids)}"
+
+    return [types.TextContent(type="text", text=msg)]
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+
+async def _run() -> None:
+    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="cerefox",
+                server_version="0.1.0",
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={},
+                ),
+            ),
+        )
+
+
+def run() -> None:
+    """Start the Cerefox MCP server over stdio."""
+    asyncio.run(_run())

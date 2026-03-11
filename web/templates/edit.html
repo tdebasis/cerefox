@@ -14,14 +14,16 @@
 
 <h1>Edit document</h1>
 <p style="color:var(--pico-muted-color);font-size:0.9rem;">
-  Saving will re-chunk and re-embed the content. This may take a few seconds.
+  If the content has changed, saving will re-chunk and re-embed it (takes a few seconds).
+  Changing only the title, projects, or metadata saves instantly without re-indexing.
 </p>
 
 {% if error %}
 <div class="flash-error">⚠ {{ error }}</div>
 {% endif %}
 
-<form method="post" action="/document/{{ doc.document_id }}/edit" enctype="multipart/form-data">
+<form method="post" action="/document/{{ doc.document_id }}/edit" enctype="multipart/form-data"
+      data-loading-modal>
   <label>
     Title <span style="color:var(--pico-del-color);">*</span>
     <input type="text" name="title" value="{{ doc.doc_title }}" required>
@@ -59,8 +61,8 @@
               style="font-family:monospace;font-size:0.85rem;">{{ doc.full_content }}</textarea>
   </label>
 
-  <div style="display:flex;gap:0.75rem;margin-top:1rem;align-items:center;">
-    {{ action_button("Save & re-index") }}
+  <div style="display:flex;gap:0.75rem;margin-top:1rem;align-items:center;flex-wrap:nowrap;">
+    {{ action_button("Save") }}
     {{ action_button("Cancel", href="/document/" ~ doc.document_id, variant="secondary") }}
   </div>
 </form>

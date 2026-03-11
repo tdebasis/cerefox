@@ -21,7 +21,12 @@ from cerefox.retrieval.search import SearchResponse, SearchResult
 
 
 def _mock_settings() -> Settings:
-    return Settings(supabase_url="http://fake", supabase_key="fake-key")
+    with patch.dict(
+        "os.environ",
+        {"CEREFOX_EMBEDDER": "openai", "OPENAI_API_KEY": "test-key"},
+        clear=False,
+    ):
+        return Settings(supabase_url="http://fake", supabase_key="fake-key")
 
 
 def _make_doc(**kwargs) -> dict:
@@ -54,7 +59,7 @@ def _make_chunk(**kwargs) -> dict:
         "title": "Section",
         "content": "Some content here.",
         "char_count": 18,
-        "embedder_primary": "mpnet",
+        "embedder_primary": "text-embedding-3-small",
         "created_at": "2026-03-08T10:00:00Z",
     }
     return {**defaults, **kwargs}

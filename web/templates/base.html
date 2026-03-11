@@ -33,16 +33,22 @@
     .result-item:hover { border-color: var(--pico-primary-background); }
     .result-content { font-size: 0.9rem; color: var(--pico-muted-color); white-space: pre-wrap; }
     .empty-state { text-align: center; padding: 3rem; color: var(--pico-muted-color); }
-    .flash-success { background: var(--pico-form-element-valid-active-border-color);
-      color: white; padding: 0.75rem 1rem; border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
-    .flash-error { background: var(--pico-form-element-invalid-active-border-color);
-      color: white; padding: 0.75rem 1rem; border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
+    .flash-success { background: white; color: var(--pico-ins-color);
+      border: 1px solid var(--pico-ins-color); padding: 0.75rem 1rem;
+      border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
+    .flash-error   { background: white; color: var(--pico-del-color);
+      border: 1px solid var(--pico-del-color); padding: 0.75rem 1rem;
+      border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
+    .flash-info    { background: white; color: var(--pico-primary);
+      border: 1px solid var(--pico-primary-border); padding: 0.75rem 1rem;
+      border-radius: var(--pico-border-radius); margin-bottom: 1rem; }
     /* Shared button utilities */
-    .btn-sm     { font-size: 0.8rem !important; padding: 0.2rem 0.6rem !important; line-height: 1.5 !important; width: auto !important; display: inline-block !important; }
+    /* margin-bottom:0 prevents PicoCSS form-context margin pushing buttons down in flex rows */
+    .btn-sm     { font-size: 0.8rem !important; padding: 0.2rem 0.6rem !important; line-height: 1.5 !important; width: auto !important; display: inline-block !important; margin-bottom: 0 !important; vertical-align: middle !important; }
     /* btn-inline: auto-width for Save/Cancel pairs and page-level actions.
        Explicit padding, font-size, box-sizing, and line-height so <button> and <a role="button">
        share identical computed height regardless of PicoCSS variant (outline, contrast, etc.). */
-    .btn-inline { width: auto !important; display: inline-block !important; line-height: 1.5 !important; padding: 0.5rem 1rem !important; font-size: 1rem !important; box-sizing: border-box !important; }
+    .btn-inline { width: auto !important; display: inline-block !important; line-height: 1.5 !important; padding: 0.5rem 1rem !important; font-size: 1rem !important; box-sizing: border-box !important; margin-bottom: 0 !important; vertical-align: middle !important; }
     .btn-danger { background: var(--pico-del-color) !important; border-color: var(--pico-del-color) !important; color: white !important; }
     /* Project label — neutral, no colour accent */
     .proj-pill { display:inline-block; font-size:0.7rem; color:var(--pico-muted-color); border:1px solid var(--pico-muted-border-color); border-radius:3px; padding:0 0.3rem; margin-left:0.25rem; vertical-align:middle; }
@@ -87,12 +93,16 @@
   (function () {
     var modal = document.getElementById('cf-loading-modal');
     if (!modal) return;
-    // showModal() creates a native browser backdrop that blocks all page interaction.
+    // HTMX requests (ingest form, etc.)
     document.body.addEventListener('htmx:beforeRequest', function (evt) {
       if (evt.target.closest('[data-loading-modal]')) modal.showModal();
     });
     document.body.addEventListener('htmx:afterRequest', function () {
       if (modal.open) modal.close();
+    });
+    // Regular form submits (edit document, etc.) — modal closes naturally on page navigation.
+    document.body.addEventListener('submit', function (evt) {
+      if (evt.target.closest('[data-loading-modal]')) modal.showModal();
     });
   }());
   </script>

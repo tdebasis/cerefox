@@ -1,136 +1,435 @@
 # Connecting AI Agents to Cerefox
 
-Cerefox exposes its knowledge base through **Supabase MCP** — any agent that supports the Model Context Protocol can search, retrieve, and write notes without any custom server.
+Cerefox exposes your knowledge base through two access paths. Choose the one that fits your
+client; you can also run both in parallel.
+
+---
+
+## Access paths at a glance
+
+| Client | Path | Search capability |
+|--------|------|-------------------|
+| Claude Desktop (local) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
+| ChatGPT Desktop (local) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
+| Cursor (local) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
+| Claude Code (CLI / Desktop Code tab) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
+| Cloud ChatGPT (chatgpt.com) | Path B — GPT Actions → Edge Functions | Hybrid (FTS + semantic), document-level |
+| Cloud Claude (claude.ai web) | Remote Supabase MCP | FTS keyword only (no semantic) |
+| curl / scripts | Path B — Edge Functions directly | Hybrid (FTS + semantic), document-level |
+| Custom Python agents | Python SDK directly | Hybrid (FTS + semantic), document-level |
+
+> **"Document-level"** means agents receive complete reconstructed notes, not isolated chunks.
+
+> **Cloud hybrid for all clients (future)**: deploying the MCP server to Cloud Run would give
+> cloud clients (claude.ai, chatgpt.com) full hybrid search. Tracked in `docs/TODO.md`.
+
+> **Perplexity** does not support MCP and has no integration path at this time.
 
 ---
 
 ## Prerequisites
 
-- Supabase project set up (see `setup-supabase.md`)
-- Schema and RPCs deployed (`python scripts/db_deploy.py`)
+**For all paths:**
+- Supabase project set up and schema deployed (see `setup-supabase.md`)
 - Some content ingested (`cerefox ingest my-notes.md`)
-- Your **project ref**: visible in Supabase → Connect → MCP tab (format: `abcdefghijklmnop`)
-- A **Personal Access Token** (PAT): create one at
-  `https://supabase.com/dashboard/account/tokens` — name it `cerefox`
 
-> **PAT vs service_role key**: The PAT is a *platform-level* account token used to authenticate
-> the MCP server. It is different from the project's anon/service_role API keys, which are for
-> direct database access only.
+**For Path A (local MCP) only:**
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed on your machine
+- Cerefox repository cloned locally (e.g. `/Users/yourname/src/cerefox`)
+- `.env` file configured with `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`,
+  and your embedding API key (`OPENAI_API_KEY`)
+
+**For Path B (Edge Functions / GPT Actions) only:**
+- Supabase Edge Functions deployed (`cerefox-search` and `cerefox-ingest`)
+- Your **anon key**: Supabase Dashboard → Project Settings → API → `anon public`
+- Your **project ref**: visible in the Supabase Dashboard URL
+  (`app.supabase.com/project/<project-ref>`)
+
+**For cloud Claude.ai only:**
+- A **Personal Access Token** (PAT): create at `https://supabase.com/dashboard/account/tokens`
 
 ---
 
-## Claude Desktop (chat)
+## Path A — Local MCP server (`cerefox mcp`)
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+### What it is
+
+`cerefox mcp` is a Python process that runs on your machine. Desktop AI clients launch it as a
+subprocess over stdio. It exposes named `cerefox_search` and `cerefox_ingest` tools directly —
+no HTTP calls, no GET-only limitations.
+
+- Embeddings are computed locally using your `.env` key (no extra credentials)
+- Works offline except for the OpenAI embedding API call per query
+- One setup, all compatible local clients (Claude Desktop, ChatGPT Desktop, Cursor, Claude Code)
+
+> **Why not `mcp-server-fetch`?** The generic fetch MCP only supports GET requests and cannot
+> make authenticated POST calls to the Edge Functions. The built-in `cerefox mcp` server is
+> the correct solution.
+
+### Path A MCP tools
+
+Once configured, every Path A client has these two tools:
+
+| Tool | Description |
+|------|-------------|
+| `cerefox_search` | Hybrid (FTS + semantic) document-level search |
+| `cerefox_ingest` | Save a note or document to the knowledge base |
+
+### Path A system prompt
+
+Set this as Custom Instructions / System Prompt in your client:
+
+```
+You have access to a personal knowledge base via the cerefox_search tool.
+When answering questions, always call cerefox_search first with a relevant query.
+Cite doc_title for every claim drawn from the knowledge base.
+Use cerefox_ingest to save anything the user asks you to remember.
+```
+
+### Path A verification prompts
+
+After setup, ask your client:
+
+> "What tools do you have available?"
+> Expected: `cerefox_search` and `cerefox_ingest` listed.
+
+> "Use cerefox_search with query='second brain' and match_count=3. What did you find?"
+
+> "Save a note titled 'Test Note' with content '# Test\nThis is a test.' using cerefox_ingest."
+
+---
+
+### Claude Desktop
+
+**Config file location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add (or merge into) the file:
 
 ```json
 {
   "mcpServers": {
-    "supabase": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@supabase/mcp-server-supabase@latest",
-        "--project-ref", "<your-project-ref>"
-      ],
-      "env": {
-        "SUPABASE_ACCESS_TOKEN": "<your-personal-access-token>"
-      }
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
     }
   }
 }
 ```
 
-**Notes:**
-- The `--supabase-url` and `--supabase-key` flags were **removed** from
-  `@supabase/mcp-server-supabase@latest`. Do not include them — Claude Desktop will fail to start.
-- `SUPABASE_ACCESS_TOKEN` is your PAT (from the account tokens page), not the service_role key.
-- Merge the `mcpServers` block into your existing `claude_desktop_config.json` as a top-level key
-  alongside any existing keys (e.g. `preferences`). Do not wrap it in an extra `{}`.
-- Restart Claude Desktop fully (Cmd+Q, not just close the window) after saving.
+Replace `/path/to/cerefox` with the absolute path to your Cerefox checkout
+(e.g. `/Users/yourname/src/cerefox` on macOS, `C:\Users\yourname\src\cerefox` on Windows).
+
+**Important:**
+- Merge the `mcpServers` block into any existing `claude_desktop_config.json` — do not wrap it
+  in an extra `{}` or replace the whole file.
+- Restart Claude Desktop fully (Cmd+Q on macOS, not just close the window) after saving.
+- No extra environment variables needed — the server reads `CEREFOX_*` settings from your `.env`.
 
 ---
 
-## Claude Code (CLI)
+### ChatGPT Desktop
+
+ChatGPT Desktop (macOS / Windows) supports MCP servers using the same JSON format as Claude Desktop.
+
+**Setup via GUI (recommended):**
+1. Open ChatGPT → **Settings** → **Advanced** → **MCP Servers** → **Edit config**
+2. This opens the config JSON file in your default editor.
+
+**Config file location (if editing directly):**
+- macOS: `~/Library/Application Support/com.openai.chat/mcp_servers.json`
+- Windows: `%APPDATA%\OpenAI\ChatGPT\mcp_servers.json`
+
+Add (or merge into) the file:
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+    }
+  }
+}
+```
+
+Replace `/path/to/cerefox` with your absolute Cerefox path.
+
+**Important:**
+- Quit and relaunch ChatGPT Desktop after saving.
+- ChatGPT Desktop requires a **ChatGPT Plus** subscription to use MCP tools.
+- On a clean macOS machine, install `uv` first:
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+  Then restart your terminal so `uv` is on your PATH before launching ChatGPT Desktop.
+
+---
+
+### Cursor
+
+1. Open **Cursor Settings** (`Cmd+,`) → **Tools & Integrations** → **MCP** → **Add new global MCP server**
+2. Paste this into the MCP config JSON:
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+    }
+  }
+}
+```
+
+3. Save and restart Cursor.
+
+Alternatively, add a `.cursor/mcp.json` file in your project root with the same content for
+project-scoped access (committed to git, shared with your team).
+
+---
+
+### Claude Code
+
+Claude Code (the CLI tool and the **Code** tab inside Claude Desktop) uses its own MCP config —
+separate from `claude_desktop_config.json`. Changes made in one do not affect the other.
+
+**Option 1: CLI command (recommended — persists across all projects)**
 
 ```bash
-# Add the MCP server with PAT authentication
-claude mcp add --scope user --transport http supabase \
-  "https://mcp.supabase.com/mcp?project_ref=<your-project-ref>" \
-  --header "Authorization: Bearer <your-personal-access-token>"
+claude mcp add --scope user cerefox \
+  uv -- --directory /path/to/cerefox run cerefox mcp
+```
 
-# Verify — should show "connected", not "needs authentication"
+- `--scope user` makes the server available in every project (stored in `~/.claude/mcp.json`).
+- Use `--scope project` instead to limit it to the current directory (stored in `.mcp.json`).
+
+Verify:
+```bash
 claude mcp list
 ```
 
-Use `--scope user` so the server is available across all your projects.
+**Option 2: `.mcp.json` in project root (project-scoped, committable)**
+
+Create `.mcp.json` in the root of the repo you work in:
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+    }
+  }
+}
+```
+
+**Code tab inside Claude Desktop:**
+The **Code** tab in Claude Desktop uses the same config as the Claude Code CLI, not
+`claude_desktop_config.json`. Run the `claude mcp add` command above — the Code tab will
+pick it up automatically.
 
 ---
 
-## Verifying the integration
+## Path B — Supabase Edge Functions (HTTP)
 
-Once connected, test with these prompts:
+### What they are
 
-**Check what tools are available:**
-> "What Supabase tools do you have available?"
+TypeScript functions deployed to Supabase, callable over HTTPS from anywhere — no local install,
+no MCP client needed. Embeddings are computed server-side using the `OPENAI_API_KEY` secret
+stored in Supabase.
 
-**Verify the Cerefox schema:**
-> "List all tables in my Supabase database that start with 'cerefox'."
+- Works from cloud agents (ChatGPT GPT Actions, scripts, CI pipelines)
+- No user machine required; Supabase handles all infrastructure
+- Constraint: embedding model is hardcoded in TypeScript — requires redeployment when changed
+  (see `docs/guides/configuration.md` → "Changing the embedding model")
 
-Expected: `cerefox_documents`, `cerefox_chunks`, `cerefox_projects`,
-`cerefox_document_projects`, `cerefox_metadata_keys`, `cerefox_migrations`
+### Path B authentication
 
-**Run a keyword search:**
-> "Call `cerefox_fts_search` with `p_query_text='second brain'` and `p_match_count=3`."
+All Edge Function calls require:
 
-FTS doesn't require an embedding, so it works immediately as a smoke test.
+```
+Authorization: Bearer <your-anon-key>
+Content-Type: application/json
+```
+
+Find your anon key: **Supabase Dashboard → Project Settings → API → `anon public`**
+
+### Path B system prompt
+
+For ChatGPT Custom GPT:
+```
+You have access to a personal knowledge base via the searchKnowledgeBase action.
+When the user asks a question, always search the knowledge base first using a
+relevant query. Present results by document title, citing the source for every claim.
+Use ingestNote to save any new information the user asks you to remember.
+```
+
+### Path B verification
+
+```bash
+curl -s -X POST \
+  "https://<your-project-ref>.supabase.co/functions/v1/cerefox-search" \
+  -H "Authorization: Bearer <your-anon-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "second brain", "match_count": 3}'
+```
+
+Expected: JSON response with `results` array containing documents.
 
 ---
 
-## Using Cerefox tools in Claude
+### ChatGPT Custom GPT (cloud — chatgpt.com)
 
-### Searching the knowledge base
+A Custom GPT with Actions pointing at the Edge Functions gives ChatGPT full hybrid search from
+any browser — no local install, no MCP client, works free with ChatGPT Plus.
 
-Ask Claude to use the tools directly:
+**Step 1 — Create the Custom GPT**
 
-> "Search my knowledge base for notes about project planning. Use `cerefox_hybrid_search`
-> with the query 'project planning'."
+1. Go to **chatgpt.com → Explore GPTs → Create**
+2. Name it (e.g. "Cerefox Assistant")
+3. Paste the system prompt from "Path B system prompt" above into the **Instructions** field
+4. Click **Create new action**
 
-Or set up a system prompt so Claude searches automatically:
+**Step 2 — Paste the OpenAPI schema**
 
+In the action editor, paste this schema (replace `<your-project-ref>`):
+
+```yaml
+openapi: 3.1.0
+info:
+  title: Cerefox Knowledge Base
+  version: 1.0.0
+servers:
+  - url: https://<your-project-ref>.supabase.co/functions/v1
+paths:
+  /cerefox-search:
+    post:
+      operationId: searchKnowledgeBase
+      summary: Search the knowledge base (hybrid FTS + semantic, document-level)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query:
+                  type: string
+                match_count:
+                  type: integer
+                  default: 5
+                project_name:
+                  type: string
+                mode:
+                  type: string
+                  default: docs
+      responses:
+        '200':
+          description: Search results
+  /cerefox-ingest:
+    post:
+      operationId: ingestNote
+      summary: Save a note to the knowledge base
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                project_name:
+                  type: string
+                source:
+                  type: string
+                  default: agent
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: Ingest result
 ```
-You have access to a personal knowledge base via Cerefox Supabase tools.
-When answering questions, first search for relevant context using
-cerefox_hybrid_search with p_match_count=10 and p_alpha=0.7.
-Always cite the doc_title and chunk content in your response.
-```
 
-### Saving a note
+**Step 3 — Configure authentication**
 
-Claude (or any agent) can capture information directly:
+In the action's **Authentication** settings:
+- Type: **API Key**
+- Auth type: **Bearer**
+- API key: your Supabase **anon key**
 
-```
-Tool: cerefox_save_note
-Parameters:
-  p_title: "Meeting notes — 2026-03-10"
-  p_content: "# Meeting notes\n\nDiscussed Q1 roadmap..."
-  p_source: "agent"
-  p_metadata: {"agent_name": "claude", "tags": ["meeting"]}
-```
+**Step 4 — Save and test**
 
-> **Note**: `cerefox_save_note` creates a document record immediately but does **not** embed
-> or chunk the content. Run `cerefox ingest` afterwards for the note to become searchable.
+Save the GPT. In a new chat, ask:
+> "Search my knowledge base for 'second brain'."
+
+> **Cost**: GPT Actions are free with ChatGPT Plus. Each Edge Function call uses a small amount
+> of OpenAI API credits for embedding (~$0.00002 per query).
 
 ---
 
-## Cursor IDE
+### curl / scripts
 
-1. Open **Cursor Settings** → **MCP** → **Add MCP Server**
-2. Choose **HTTP** transport, enter the Supabase MCP URL:
+Direct HTTP access — useful for shell scripts, CI pipelines, or one-off queries.
+
+**Search:**
+```bash
+curl -s -X POST \
+  "https://<your-project-ref>.supabase.co/functions/v1/cerefox-search" \
+  -H "Authorization: Bearer <your-anon-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "knowledge management", "match_count": 5}'
+```
+
+**Ingest:**
+```bash
+curl -s -X POST \
+  "https://<your-project-ref>.supabase.co/functions/v1/cerefox-ingest" \
+  -H "Authorization: Bearer <your-anon-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Meeting Notes 2026-03-11",
+    "content": "# Meeting Notes\n\n## Q1 Roadmap\n\nWe agreed to prioritize...",
+    "project_name": "Work",
+    "source": "agent"
+  }'
+```
+
+If the same content was already ingested (SHA-256 hash match), returns `"skipped": true`.
+
+**Edge Function parameters — `cerefox-search`:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | Natural-language search query |
+| `project_name` | string | optional | Filter by project name (case-insensitive) |
+| `match_count` | number | 5 | Maximum **documents** to return |
+| `mode` | string | `"docs"` | `"docs"` = full document results (recommended) |
+| `alpha` | number | 0.7 | Semantic weight (0 = FTS only, 1 = semantic only) |
+| `min_score` | number | 0.5 | Minimum cosine similarity threshold |
+
+---
+
+### Cloud Claude (claude.ai web)
+
+Claude.ai web can connect to the Supabase-hosted remote MCP (no local install):
+
+1. In Claude.ai: **Settings → Integrations → Add integration**
+2. Enter the MCP URL:
    ```
-   https://mcp.supabase.com/mcp?project_ref=<your-project-ref>
+   https://mcp.supabase.com/sse?project_ref=<your-project-ref>
    ```
-3. Add the Authorization header with your PAT.
+3. Authenticate with your Personal Access Token when prompted.
+
+> **Limitation**: The cloud Supabase MCP only supports **FTS keyword search** — no hybrid or
+> semantic search. For full hybrid search from the web, deploy the MCP server to Cloud Run
+> (see `docs/TODO.md` → "Remote HTTP MCP server").
 
 ---
 
@@ -141,28 +440,72 @@ Use the Cerefox Python client directly for scripted or embedded agents:
 ```python
 from cerefox.config import Settings
 from cerefox.db.client import CerefoxClient
-from cerefox.embeddings.mpnet import MpnetEmbedder
+from cerefox.embeddings.cloud import CloudEmbedder
 from cerefox.retrieval.search import SearchClient
 
 settings = Settings()            # reads from .env
 client = CerefoxClient(settings)
-embedder = MpnetEmbedder()
+embedder = CloudEmbedder(
+    api_key=settings.get_embedder_api_key(),
+    base_url=settings.get_embedder_base_url(),
+    model=settings.get_embedder_model(),
+    dimensions=settings.get_embedder_dimensions(),
+)
 sc = SearchClient(client, embedder, settings)
 
-resp = sc.hybrid("what did I write about Rust?", match_count=5)
+resp = sc.search_docs("what did I write about Rust?", match_count=5)
 for hit in resp.results:
-    print(f"[{hit.score:.2f}] {hit.doc_title} — {hit.content[:200]}")
+    print(f"[{hit.best_score:.2f}] {hit.doc_title}")
+    print(hit.full_content[:400])
 ```
 
 ---
 
-## RPC Reference
+## Keeping both paths in sync
 
-All RPCs are defined in `src/cerefox/db/rpcs.sql` and verified deployed to the live database.
+Both paths use the same Postgres RPCs and the same stored embeddings, but embed queries
+independently. If you change the embedding model, **update both paths** before searching:
+
+1. Update `.env` + run `cerefox reindex` (re-embeds stored chunks via Python)
+2. Update the TypeScript constants in `supabase/functions/*/index.ts` + redeploy Edge Functions
+
+See `docs/guides/configuration.md` → "Changing the embedding model" for the full procedure.
+
+---
+
+## MCP tool reference
+
+### `cerefox_search`
+
+Search the knowledge base. Returns complete documents ranked by hybrid (FTS + semantic) relevance.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `query` | string | required | Natural-language search query |
+| `match_count` | integer | 5 | Maximum **documents** to return |
+| `project_name` | string | optional | Filter to a specific project |
+
+### `cerefox_ingest`
+
+Save a note or document to the knowledge base.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `title` | string | required | Document title |
+| `content` | string | required | Markdown content |
+| `project_name` | string | optional | Assign to a project (created if absent) |
+| `source` | string | `"agent"` | Origin label |
+| `metadata` | object | `{}` | Arbitrary JSON metadata |
+
+---
+
+## RPC reference
+
+All RPCs are defined in `src/cerefox/db/rpcs.sql`.
 
 ### Search RPCs
 
-Every chunk-level search RPC returns:
+Every chunk-level RPC returns these fields:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -199,7 +542,7 @@ Vector similarity search. Requires a pre-computed query embedding.
 | `p_match_count` | INT | 10 | Results to return |
 | `p_use_upgrade` | BOOL | false | Use upgrade embedding column |
 | `p_project_id` | UUID | null | Filter by project |
-| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity. When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity |
 
 #### `cerefox_hybrid_search`
 
@@ -213,15 +556,13 @@ Combines FTS and semantic search via linear alpha blending. Two overloads (with/
 | `p_alpha` | FLOAT | 0.7 | Semantic weight (0=FTS only, 1=semantic only) |
 | `p_use_upgrade` | BOOL | false | Use upgrade embedding column |
 | `p_project_id` | UUID | null | Filter by project |
-| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity (FTS matches always pass through). When called via the Python layer, `CEREFOX_MIN_SEARCH_SCORE` (default 0.65) is applied automatically. |
+| `p_min_score` | FLOAT | 0.0 | Minimum cosine similarity |
 
 #### `cerefox_search_docs`
 
-Document-level search. Runs hybrid search internally, deduplicates by document (keeping the
-best-scoring chunk per document), then returns up to `p_match_count` **distinct documents**
-with their full reconstructed content. Two overloads (with/without `p_project_id`).
-
-Use this when you want complete notes rather than isolated chunks.
+Document-level search. Runs hybrid search internally, deduplicates by document, then returns up to
+`p_match_count` **distinct documents** with their full reconstructed content. **This is the
+recommended RPC for agent use** — agents receive complete notes, not isolated chunks.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -253,8 +594,7 @@ Returns: `document_id`, `doc_title`, `doc_source`, `doc_metadata`, `full_content
 #### `cerefox_context_expand`
 
 Small-to-big retrieval: given a set of chunk IDs, returns those chunks **plus their immediate
-neighbours** (±`p_window_size` chunks within the same document). Use after chunk-level search
-to recover surrounding context without fetching the full document.
+neighbours** (±`p_window_size` chunks within the same document).
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -266,8 +606,8 @@ Returns: `chunk_id`, `document_id`, `chunk_index`, `title`, `content`, `heading_
 
 #### `cerefox_save_note`
 
-Create a document record directly from an agent without going through the ingestion pipeline.
-The note is stored but **not embedded** — run `cerefox ingest` to make it searchable.
+Create a document record directly. The note is stored but **not embedded** — use `cerefox-ingest`
+Edge Function instead for notes that need to be immediately searchable.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -285,8 +625,6 @@ Returns: `id`, `title`, `created_at`
 
 #### `cerefox_upsert_metadata_key`
 
-Register or update a metadata key in the key registry.
-
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `p_key` | TEXT | Key name (snake_case) |
@@ -295,16 +633,13 @@ Register or update a metadata key in the key registry.
 
 #### `cerefox_delete_metadata_key`
 
-Remove a key from the registry.
-
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `p_key` | TEXT | Key to remove |
 
 #### `cerefox_list_metadata_keys`
 
-List all registered metadata keys. No parameters. Returns: `key`, `label`, `description`,
-`created_at`, `updated_at`.
+No parameters. Returns: `key`, `label`, `description`, `created_at`, `updated_at`.
 
 ---
 

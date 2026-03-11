@@ -16,12 +16,16 @@
 - [ ] Metadata-filtered search (e.g., search only within a project or tag)
 
 ### Embeddings
-- [ ] Vertex AI text-embedding-005 embedder
-- [ ] OpenAI embedder
-- [ ] Embedding refresh/migration tool (re-embed all content with a new model)
-- [ ] Benchmark: compare retrieval quality across embedders on real data
+- [x] OpenAI embedder — `CloudEmbedder` (Phase 8, default)
+- [x] Fireworks AI embedder — same class, different base_url/model (Phase 8)
+- [x] Embedding migration tool — `cerefox reindex` re-embeds all chunks in-place (Phase 8)
+- [ ] **Edge Function model config via Supabase secrets** — `OPENAI_MODEL` and
+  `EMBEDDING_DIMENSIONS` are currently hardcoded as TypeScript constants. Move them to
+  Supabase secrets so changing the model only requires updating `.env` + `cerefox reindex`,
+  without editing TypeScript or redeploying functions.
+- [ ] Vertex AI text-embedding-005 embedder (add as another cloud provider)
+- [ ] Benchmark: compare retrieval quality across OpenAI vs Fireworks embedders on real data
 - [ ] Matryoshka/PCA dimensionality reduction for models that don't output 768-dim
-- [ ] Investigate smaller/faster models (e.g., all-MiniLM-L6-v2) for quick primary embeddings
 
 ### Ingestion
 - [ ] **Bug: rollback document insert if embedding/chunk-insert fails** — currently if the pipeline crashes after inserting the document row but before inserting chunks, the document exists with no chunks and subsequent retries are silently skipped as duplicates. Fix: delete the document row on any exception after insert, or use a DB transaction.
@@ -79,11 +83,21 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] Sync between local Postgres and Supabase
 
 ### MCP & Agent Integration
-- [ ] Custom MCP server (for server-side embedding, richer tools)
-- [ ] Agent-side embedding helper (provide embedding via API so agents don't need their own)
+- [x] **Supabase Edge Functions** — `cerefox-search` and `cerefox-ingest` deployed to Supabase;
+  callable over HTTPS from any HTTP client; server-side OpenAI embedding means no local model needed.
+  Note: `invoke_edge_function` does NOT exist in `@supabase/mcp-server-supabase` v0.7.0.
+- [x] **Built-in MCP server** (`cerefox mcp`) — local stdio MCP server using the MCP Python SDK;
+  exposes `cerefox_search` and `cerefox_ingest` as named tools; reads `.env`; works with Claude
+  Desktop, ChatGPT Desktop, Cursor, Claude Code. Replaces the failed `mcp-server-fetch` approach.
+- [x] **ChatGPT Custom GPT (GPT Actions)** — OpenAPI spec pointing at Edge Functions; Bearer auth
+  with Supabase anon key; free with ChatGPT Plus; full hybrid search from cloud ChatGPT.
+- [ ] **Remote HTTP MCP server** (Cloud Run) — deploy `cerefox mcp` to Cloud Run so cloud AI
+  clients (Claude.ai web, chatgpt.com direct) get full hybrid search without Edge Functions.
+  This is the key enabler for universal cloud client access.
+- [ ] **OpenClaw** integration — OpenClaw (open-source AI agent) MCP config; same Path A
+  approach as Cursor/Claude Code; track once the tool matures.
 - [ ] Usage analytics (which tools agents call most, common query patterns)
-- [ ] Tool for agents to add notes directly (`cerefox_save_note` RPC) — now in plan Phase 4; track enhanced features here: agent-authored content filtering in search, agent contribution audit log, per-agent note quotas
-- [ ] Plugins for non-MCP agents (ChatGPT plugin, etc.)
+- [ ] Perplexity — does not support MCP; no integration possible at this time.
 
 ---
 

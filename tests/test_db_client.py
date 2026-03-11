@@ -26,7 +26,11 @@ class TestClientInitialization:
         assert client._client is None
 
     def test_client_raises_when_url_missing(self) -> None:
-        with patch.dict("os.environ", {"CEREFOX_SUPABASE_URL": "", "CEREFOX_SUPABASE_KEY": ""}, clear=False):
+        with patch.dict(
+            "os.environ",
+            {"CEREFOX_SUPABASE_URL": "", "CEREFOX_SUPABASE_KEY": "", "CEREFOX_EMBEDDER": "openai"},
+            clear=False,
+        ):
             settings = Settings()
         client = CerefoxClient(settings)
         with pytest.raises(RuntimeError, match="not configured"):

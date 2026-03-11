@@ -9,6 +9,7 @@ Get Cerefox running locally and ingest your first document.
 - Python 3.11+ (`python3 --version`)
 - `uv` package manager (`pip install uv`)
 - A Supabase account — [supabase.com](https://supabase.com) (free tier works)
+- An OpenAI API key — [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (free credits available)
 
 ---
 
@@ -17,10 +18,10 @@ Get Cerefox running locally and ingest your first document.
 ```bash
 git clone https://github.com/yourname/cerefox.git
 cd cerefox
-uv sync --extra mpnet
+uv sync
 ```
 
-> `--extra mpnet` installs `sentence-transformers` for local embeddings (the default embedder). The model (~420 MB) downloads automatically on first use.
+> No heavy ML model downloads needed — embeddings are handled by the OpenAI API.
 
 ---
 
@@ -38,6 +39,7 @@ Create a `.env` file:
 CEREFOX_SUPABASE_URL=https://your-project-ref.supabase.co
 CEREFOX_SUPABASE_KEY=your-service-role-key
 CEREFOX_DATABASE_URL=postgresql://postgres:password@db.your-project-ref.supabase.co:5432/postgres
+OPENAI_API_KEY=sk-...your-openai-key...
 ```
 
 ---
@@ -84,8 +86,6 @@ You'll see:
    Total chars : 73
 ```
 
-**First ingest downloads the embedding model (~420 MB). Subsequent ingests are instant.**
-
 ---
 
 ## 6. Start the web UI (30 sec)
@@ -110,40 +110,50 @@ Or use the web UI at [http://localhost:8000/search](http://localhost:8000/search
 
 ---
 
-## 8. Connect an AI agent (optional, 3 min)
+## 8. Connect an AI agent (optional, 5 min)
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+Cerefox ships a built-in MCP server. Add it to Claude Desktop's config file
+(`~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "supabase": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@supabase/mcp-server-supabase@latest",
-        "--supabase-url", "https://your-project-ref.supabase.co",
-        "--supabase-key", "your-service-role-key"
-      ]
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
     }
   }
 }
 ```
 
-Restart Claude Desktop. Ask Claude: *"Search my knowledge base for my first note using cerefox_hybrid_search."*
+Replace `/path/to/cerefox` with the absolute path to this checkout. Restart Claude Desktop.
+
+Set this as your system prompt (Custom Instructions) so Claude searches automatically:
+```
+You have access to my personal knowledge base via the cerefox_search tool.
+When answering questions in this session, always call cerefox_search first with a
+relevant query. Cite doc_title for every claim. Use cerefox_ingest to save anything
+I ask you to save to the knowledge base (in md format).
+```
+
+> **ChatGPT Desktop** uses the same MCP config format — same `cerefox` entry works.
+> **Cloud clients** (claude.ai, chatgpt.com) need a deployed server — see `docs/guides/connect-agents.md`.
+
+For full setup details (Cursor, cloud clients, GPT Actions), see `docs/guides/connect-agents.md`.
 
 ---
 
-## You're done! 🎉
+## You're done!
 
 **What's next:**
 - Ingest a directory of notes: `cerefox ingest-dir ./notes/ --recursive`
 - Ingest a PDF: `cerefox ingest document.pdf` (requires `uv pip install pypdf`)
+- Re-embed existing content: `cerefox reindex`
 - Create a backup: `python scripts/backup_create.py`
 - See all commands: `cerefox --help`
 
 **More guides:**
 - `docs/guides/setup-supabase.md` — detailed Supabase setup
 - `docs/guides/configuration.md` — all configuration options
-- `docs/guides/connect-agents.md` — connecting AI agents via MCP
+- `docs/guides/connect-agents.md` — connecting AI agents via MCP and Edge Functions
 - `docs/guides/setup-local.md` — local Docker setup (no Supabase account needed)

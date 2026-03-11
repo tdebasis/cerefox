@@ -192,15 +192,31 @@ uv run pytest -m integration
 
 ---
 
-## Step 9 — Connect to Supabase MCP (optional, for agents)
+## Step 9 — Connect an AI agent (optional)
 
-Once documents are ingested, AI agents can search Cerefox via the Supabase MCP server.
+Cerefox ships a built-in MCP server that gives desktop agents named tools
+(`cerefox_search`, `cerefox_ingest`) with full hybrid search.
 
-1. In your Supabase project, go to **Project Settings → Integrations → MCP**
-2. Enable the MCP server
-3. Copy the MCP endpoint URL and token
+**For Claude Desktop / ChatGPT Desktop / Cursor** — add to the client's MCP config:
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+    }
+  }
+}
+```
 
-Then configure your agent. See `docs/guides/connect-agents.md` for Claude, Cursor, and generic MCP client setup.
+**For cloud Claude.ai** — connect to the Supabase remote MCP (FTS keyword search only):
+1. In Supabase Dashboard → Project Settings → Integrations → MCP, get your project ref
+2. In Claude.ai Settings → Integrations, add `https://mcp.supabase.com/sse?project_ref=<ref>`
+
+**For cloud ChatGPT** — create a Custom GPT with GPT Actions pointing at the Edge Functions.
+
+See `docs/guides/connect-agents.md` for the complete guide including system prompts,
+architecture explanation, and ChatGPT GPT Actions setup.
 
 ---
 

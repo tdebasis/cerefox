@@ -303,6 +303,57 @@ class CerefoxClient:
             logger.error("list_chunks_for_document failed: %s", exc)
             raise RuntimeError(f"list_chunks_for_document failed: {exc}") from exc
 
+    def list_all_chunks(
+        self,
+        embedder_not: str | None = None,
+        batch_size: int = 200,
+    ) -> list[dict[str, Any]]:
+        """Return all chunks, optionally excluding those already embedded by a given model.
+
+        Used by ``cerefox reindex`` to find chunks that need re-embedding.
+
+        Args:
+            embedder_not: If set, exclude chunks where ``embedder_primary`` equals
+                this string (i.e. already up to date).
+            batch_size: Page size for pagination (max Supabase returns per request).
+        """
+        results: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            try:
+                query = (
+                    self.client.table("cerefox_chunks")
+                    .select("id, document_id, content, embedder_primary")
+                    .order("id")
+                    .range(offset, offset + batch_size - 1)
+                )
+                if embedder_not:
+                    query = query.neq("embedder_primary", embedder_not)
+                page = query.execute().data or []
+                results.extend(page)
+                if len(page) < batch_size:
+                    break
+                offset += batch_size
+            except Exception as exc:
+                logger.error("list_all_chunks failed at offset %d: %s", offset, exc)
+                raise RuntimeError(f"list_all_chunks failed: {exc}") from exc
+        return results
+
+    def update_chunk_embedding(
+        self,
+        chunk_id: str,
+        embedding: list[float],
+        embedder_name: str,
+    ) -> None:
+        """Update the primary embedding and embedder label for a single chunk."""
+        try:
+            self.client.table("cerefox_chunks").update(
+                {"embedding_primary": embedding, "embedder_primary": embedder_name}
+            ).eq("id", chunk_id).execute()
+        except Exception as exc:
+            logger.error("update_chunk_embedding failed for chunk %s: %s", chunk_id, exc)
+            raise RuntimeError(f"update_chunk_embedding failed: {exc}") from exc
+
     # ── Projects ───────────────────────────────────────────────────────────────
 
     def get_or_create_project(self, name: str, description: str = "") -> dict[str, Any]:

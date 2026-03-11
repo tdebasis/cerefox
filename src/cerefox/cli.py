@@ -48,14 +48,27 @@ def _get_client(settings: Settings):
 
 
 def _get_embedder(settings: Settings):
-    """Return the configured embedder instance."""
-    if settings.embedder == "ollama":
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder  # noqa: PLC0415
+    """Return the configured CloudEmbedder instance."""
+    import sys  # noqa: PLC0415
 
-        return OllamaEmbedder(base_url=settings.ollama_url, model=settings.ollama_model)
-    from cerefox.embeddings.mpnet import MpnetEmbedder  # noqa: PLC0415
+    from cerefox.embeddings.cloud import CloudEmbedder  # noqa: PLC0415
 
-    return MpnetEmbedder()
+    api_key = settings.get_embedder_api_key()
+    if not api_key:
+        provider = "OPENAI" if settings.embedder == "openai" else "FIREWORKS"
+        click.echo(
+            f"❌  Embedding API key not set.\n"
+            f"    Set CEREFOX_{provider}_API_KEY in your .env file.",
+            err=True,
+        )
+        sys.exit(1)
+
+    return CloudEmbedder(
+        api_key=api_key,
+        base_url=settings.get_embedder_base_url(),
+        model=settings.get_embedder_model(),
+        dimensions=settings.get_embedder_dimensions(),
+    )
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────
@@ -434,6 +447,98 @@ def metadata_keys_delete(key: str, yes: bool) -> None:
 
     client.delete_metadata_key(key)
     click.echo(f"✓  Removed key: {key}")
+
+
+# ── reindex ───────────────────────────────────────────────────────────────────
+
+
+@cli.command("reindex")
+@click.option(
+    "--batch",
+    default=50,
+    show_default=True,
+    help="Number of chunks to embed per API call.",
+)
+@click.option(
+    "--all",
+    "reindex_all",
+    is_flag=True,
+    default=False,
+    help="Re-embed every chunk, even those already embedded with the current model.",
+)
+def reindex(batch: int, reindex_all: bool) -> None:
+    """Re-embed all chunks with the currently configured embedder.
+
+    Use this after switching embedders (e.g. from mpnet to OpenAI) to migrate
+    existing content. By default, skips chunks already embedded by the current
+    model. Use --all to force re-embedding of everything.
+    """
+    settings = Settings()
+    client = _get_client(settings)
+    embedder = _get_embedder(settings)
+
+    skip_model = None if reindex_all else embedder.model_name
+    chunks = client.list_all_chunks(embedder_not=skip_model)
+
+    if not chunks:
+        click.echo("✓  Nothing to reindex — all chunks already use the current embedder.")
+        return
+
+    click.echo(
+        f"Reindexing {len(chunks)} chunk(s) with {embedder.model_name} "
+        f"(batch size {batch})…"
+    )
+
+    updated = 0
+    failed = 0
+    for i in range(0, len(chunks), batch):
+        chunk_batch = chunks[i : i + batch]
+        texts = [c["content"] for c in chunk_batch]
+        try:
+            embeddings = embedder.embed_batch(texts)
+        except Exception as exc:
+            click.echo(f"  ⚠  Embedding batch {i // batch + 1} failed: {exc}", err=True)
+            failed += len(chunk_batch)
+            continue
+
+        for chunk, embedding in zip(chunk_batch, embeddings):
+            try:
+                client.update_chunk_embedding(chunk["id"], embedding, embedder.model_name)
+                updated += 1
+            except Exception as exc:
+                click.echo(f"  ⚠  Failed to update chunk {chunk['id']}: {exc}", err=True)
+                failed += 1
+
+        click.echo(f"  {updated}/{len(chunks)} chunks done…", nl=False)
+        click.echo("\r", nl=False)
+
+    click.echo(f"✓  Reindex complete: {updated} updated, {failed} failed.")
+
+
+# ── mcp ───────────────────────────────────────────────────────────────────────
+
+
+@cli.command("mcp")
+def mcp_server() -> None:
+    """Start the Cerefox MCP server (stdio transport).
+
+    Add to Claude Desktop's claude_desktop_config.json:
+
+    \b
+    {
+      "mcpServers": {
+        "cerefox": {
+          "command": "uv",
+          "args": ["--directory", "/path/to/cerefox", "run", "cerefox", "mcp"]
+        }
+      }
+    }
+
+    Exposes two tools: cerefox_search and cerefox_ingest.
+    """
+    from cerefox.mcp_server import run  # noqa: PLC0415
+
+    run()
 
 
 # ── web ───────────────────────────────────────────────────────────────────────

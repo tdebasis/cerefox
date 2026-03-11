@@ -27,7 +27,7 @@
     Description
     <input type="text" name="description" value="{{ project.description or '' }}" placeholder="Optional description">
   </label>
-  <div style="display:flex;gap:0.75rem;margin-top:1rem;align-items:center;">
+  <div style="display:flex;gap:0.75rem;margin-top:1rem;align-items:center;flex-wrap:nowrap;">
     {{ action_button("Save") }}
     {{ action_button("Cancel", href="/projects", variant="secondary") }}
   </div>

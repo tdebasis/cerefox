@@ -1,12 +1,10 @@
 """Tests for embedder implementations and the Embedder protocol.
 
-All tests use mocked external dependencies — no sentence-transformers model
-is downloaded and no Ollama server is contacted.
+All tests use mocked httpx calls — no network access.
 """
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,63 +12,15 @@ import pytest
 from cerefox.embeddings.base import Embedder
 
 
-# ── Fixtures ──────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture()
-def mock_sentence_transformers():
-    """Inject a mock ``sentence_transformers`` module into sys.modules.
-
-    Returns the mock ``SentenceTransformer`` class so tests can configure it.
-    The fixture tears itself down by removing the mock from sys.modules.
-    """
-    mock_module = MagicMock()
-    mock_cls = MagicMock()
-    mock_module.SentenceTransformer = mock_cls
-    with patch.dict(sys.modules, {"sentence_transformers": mock_module}):
-        # If MpnetEmbedder was already imported before the patch, its cached
-        # reference to the real module must also be cleared.
-        sys.modules.pop("cerefox.embeddings.mpnet", None)
-        yield mock_cls
-
-
-@pytest.fixture()
-def mpnet(mock_sentence_transformers):
-    """Return an MpnetEmbedder whose underlying model is fully mocked."""
-    from cerefox.embeddings.mpnet import MpnetEmbedder
-
-    embedder = MpnetEmbedder()
-
-    # Configure the mock model instance that _load() will return.
-    mock_instance = MagicMock()
-    mock_sentence_transformers.return_value = mock_instance
-
-    # Single-embed: encode() returns something with .tolist() → 768 floats.
-    single_vec = MagicMock()
-    single_vec.tolist.return_value = [0.1] * 768
-
-    # Batch-embed: encode() returns something with .tolist() → list of lists.
-    batch_vecs = MagicMock()
-    batch_vecs.tolist.return_value = [[0.1] * 768, [0.2] * 768]
-
-    # By default configure for single-embed; tests that need batch can override.
-    mock_instance.encode.return_value = single_vec
-
-    return embedder, mock_instance, single_vec, batch_vecs
-
-
 # ── Embedder protocol ─────────────────────────────────────────────────────────
 
 
 class TestEmbedderProtocol:
-    def test_mpnet_satisfies_protocol(self, mpnet) -> None:
-        embedder, *_ = mpnet
+    def test_cloud_embedder_satisfies_protocol(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
+
+        embedder = CloudEmbedder(api_key="test-key")
         assert isinstance(embedder, Embedder)
-
-    def test_ollama_satisfies_protocol(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
-
-        assert isinstance(OllamaEmbedder(), Embedder)
 
     def test_protocol_is_runtime_checkable(self) -> None:
         # A minimal duck-typed object satisfies the Protocol at runtime.
@@ -87,175 +37,214 @@ class TestEmbedderProtocol:
         assert isinstance(FakeEmbedder(), Embedder)
 
 
-# ── MpnetEmbedder ─────────────────────────────────────────────────────────────
+# ── CloudEmbedder ─────────────────────────────────────────────────────────────
 
 
-class TestMpnetEmbedder:
-    def test_dimensions_property(self, mpnet) -> None:
-        embedder, *_ = mpnet
-        assert embedder.dimensions == 768
-
-    def test_model_name_property(self, mpnet) -> None:
-        embedder, *_ = mpnet
-        assert embedder.model_name == "sentence-transformers/all-mpnet-base-v2"
-
-    def test_model_not_loaded_on_init(self, mock_sentence_transformers) -> None:
-        """The model must not be instantiated until the first embed call."""
-        from cerefox.embeddings.mpnet import MpnetEmbedder
-
-        embedder = MpnetEmbedder()
-        assert embedder._model is None
-        mock_sentence_transformers.assert_not_called()
-
-    def test_embed_returns_768_floats(self, mpnet) -> None:
-        embedder, mock_model, single_vec, _ = mpnet
-        mock_model.encode.return_value = single_vec
-
-        result = embedder.embed("hello world")
-
-        assert isinstance(result, list)
-        assert len(result) == 768
-        assert all(isinstance(v, float) for v in result)
-
-    def test_embed_calls_encode_with_normalize(self, mpnet) -> None:
-        embedder, mock_model, single_vec, _ = mpnet
-        mock_model.encode.return_value = single_vec
-
-        embedder.embed("test")
-
-        mock_model.encode.assert_called_once_with("test", normalize_embeddings=True)
-
-    def test_embed_batch_returns_list_of_vectors(self, mpnet) -> None:
-        embedder, mock_model, _, batch_vecs = mpnet
-        mock_model.encode.return_value = batch_vecs
-
-        result = embedder.embed_batch(["one", "two"])
-
-        assert isinstance(result, list)
-        assert len(result) == 2
-        for vec in result:
-            assert len(vec) == 768
-
-    def test_embed_batch_empty_list_returns_empty(self, mpnet) -> None:
-        embedder, mock_model, *_ = mpnet
-        result = embedder.embed_batch([])
-        assert result == []
-        mock_model.encode.assert_not_called()
-
-    def test_model_loaded_lazily_on_first_embed(self, mpnet) -> None:
-        embedder, mock_model, single_vec, _ = mpnet
-        mock_model.encode.return_value = single_vec
-
-        assert embedder._model is None
-        embedder.embed("trigger load")
-        assert embedder._model is not None
-
-    def test_model_loaded_only_once_for_multiple_embeds(self, mpnet, mock_sentence_transformers) -> None:
-        embedder, mock_model, single_vec, _ = mpnet
-        mock_model.encode.return_value = single_vec
-
-        embedder.embed("first")
-        embedder.embed("second")
-
-        mock_sentence_transformers.assert_called_once()
-
-    def test_missing_package_raises_runtime_error(self) -> None:
-        """If sentence-transformers is not installed, a clear RuntimeError is raised."""
-        with patch.dict(sys.modules, {"sentence_transformers": None}):
-            sys.modules.pop("cerefox.embeddings.mpnet", None)
-            from cerefox.embeddings.mpnet import MpnetEmbedder
-
-            embedder = MpnetEmbedder()
-            with pytest.raises(RuntimeError, match="sentence-transformers"):
-                embedder.embed("boom")
+def _make_openai_response(embeddings: list[list[float]]) -> MagicMock:
+    """Build a fake httpx response matching the OpenAI embeddings API shape."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [
+            {"index": i, "embedding": emb}
+            for i, emb in enumerate(embeddings)
+        ]
+    }
+    return mock_resp
 
 
-# ── OllamaEmbedder ────────────────────────────────────────────────────────────
+class TestCloudEmbedderInit:
+    def test_requires_api_key(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-
-class TestOllamaEmbedder:
-    """Tests for OllamaEmbedder.  httpx calls are mocked."""
+        with pytest.raises(ValueError, match="API key"):
+            CloudEmbedder(api_key="")
 
     def test_dimensions_property(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-        assert OllamaEmbedder().dimensions == 768
-
-    def test_custom_dimensions(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
-
-        assert OllamaEmbedder(dimensions=1024).dimensions == 1024
+        embedder = CloudEmbedder(api_key="key", dimensions=768)
+        assert embedder.dimensions == 768
 
     def test_model_name_property(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-        assert OllamaEmbedder(model="nomic-embed-text").model_name == "nomic-embed-text"
+        embedder = CloudEmbedder(api_key="key", model="text-embedding-3-small")
+        assert embedder.model_name == "text-embedding-3-small"
 
-    def test_embed_posts_to_correct_endpoint(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+    def test_default_model(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-        embedder = OllamaEmbedder(base_url="http://localhost:11434", model="nomic-embed-text")
-        fake_vec = [0.5] * 768
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": fake_vec}
+        embedder = CloudEmbedder(api_key="key")
+        assert embedder.model_name == "text-embedding-3-small"
 
-        with patch("httpx.post", return_value=mock_response) as mock_post:
-            result = embedder.embed("hello")
+    def test_default_dimensions(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-        mock_post.assert_called_once_with(
-            "http://localhost:11434/api/embeddings",
-            json={"model": "nomic-embed-text", "prompt": "hello"},
-            timeout=30.0,
-        )
-        assert result == fake_vec
+        embedder = CloudEmbedder(api_key="key")
+        assert embedder.dimensions == 768
 
-    def test_embed_returns_embedding_from_response(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+    def test_trailing_slash_stripped_from_base_url(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-        embedder = OllamaEmbedder()
-        expected = [0.1] * 768
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": expected}
+        embedder = CloudEmbedder(api_key="key", base_url="https://api.openai.com/v1/")
+        assert not embedder._base_url.endswith("/")
 
-        with patch("httpx.post", return_value=mock_response):
-            result = embedder.embed("test text")
 
-        assert result == expected
+class TestCloudEmbedderEmbed:
+    @pytest.fixture()
+    def embedder(self):
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-    def test_embed_raises_runtime_error_on_http_error(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+        return CloudEmbedder(api_key="test-key", model="text-embedding-3-small", dimensions=768)
 
+    def test_embed_returns_768_floats(self, embedder) -> None:
+        fake_vec = [0.1] * 768
+        with patch("httpx.post", return_value=_make_openai_response([fake_vec])):
+            result = embedder.embed("hello world")
+        assert isinstance(result, list)
+        assert len(result) == 768
+
+    def test_embed_posts_to_correct_url(self, embedder) -> None:
+        fake_vec = [0.1] * 768
+        with patch("httpx.post", return_value=_make_openai_response([fake_vec])) as mock_post:
+            embedder.embed("hello")
+        called_url = mock_post.call_args[0][0]
+        assert called_url.endswith("/embeddings")
+        assert "openai.com" in called_url
+
+    def test_embed_sends_authorization_header(self, embedder) -> None:
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 768])) as mock_post:
+            embedder.embed("test")
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer test-key"
+
+    def test_embed_sends_model_and_input(self, embedder) -> None:
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 768])) as mock_post:
+            embedder.embed("my text")
+        payload = mock_post.call_args[1]["json"]
+        assert payload["model"] == "text-embedding-3-small"
+        assert payload["input"] == ["my text"]
+
+    def test_embed_sends_dimensions_when_not_1536(self, embedder) -> None:
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 768])) as mock_post:
+            embedder.embed("text")
+        payload = mock_post.call_args[1]["json"]
+        assert payload.get("dimensions") == 768
+
+    def test_embed_omits_dimensions_when_1536(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
+
+        embedder = CloudEmbedder(api_key="key", dimensions=1536)
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 1536])) as mock_post:
+            embedder.embed("text")
+        payload = mock_post.call_args[1]["json"]
+        assert "dimensions" not in payload
+
+    def test_embed_raises_on_http_error(self, embedder) -> None:
         import httpx
 
-        embedder = OllamaEmbedder()
         with patch("httpx.post", side_effect=httpx.HTTPError("connection refused")):
-            with pytest.raises(RuntimeError, match="Ollama embedding request failed"):
+            with pytest.raises(RuntimeError, match="Embedding API request failed"):
                 embedder.embed("boom")
 
-    def test_embed_batch_calls_embed_for_each_text(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+    def test_embed_raises_on_status_error(self, embedder) -> None:
+        import httpx
 
-        embedder = OllamaEmbedder()
-        fake_vec = [0.0] * 768
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": fake_vec}
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401 Unauthorized", request=MagicMock(), response=MagicMock(status_code=401, text="Unauthorized")
+        )
+        mock_resp.status_code = 401
+        with patch("httpx.post", return_value=mock_resp):
+            with pytest.raises(RuntimeError, match="Embedding API error"):
+                embedder.embed("bad key")
 
-        with patch("httpx.post", return_value=mock_response) as mock_post:
-            results = embedder.embed_batch(["one", "two", "three"])
 
-        assert len(results) == 3
-        assert mock_post.call_count == 3
+class TestCloudEmbedderBatch:
+    @pytest.fixture()
+    def embedder(self):
+        from cerefox.embeddings.cloud import CloudEmbedder
 
-    def test_base_url_trailing_slash_stripped(self) -> None:
-        from cerefox.embeddings.ollama_embed import OllamaEmbedder
+        return CloudEmbedder(api_key="test-key")
 
-        embedder = OllamaEmbedder(base_url="http://localhost:11434/")
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"embedding": [0.0] * 768}
+    def test_embed_batch_empty_input_returns_empty(self, embedder) -> None:
+        with patch("httpx.post") as mock_post:
+            result = embedder.embed_batch([])
+        assert result == []
+        mock_post.assert_not_called()
 
-        with patch("httpx.post", return_value=mock_response) as mock_post:
+    def test_embed_batch_returns_one_vector_per_input(self, embedder) -> None:
+        vecs = [[float(i)] * 768 for i in range(3)]
+        with patch("httpx.post", return_value=_make_openai_response(vecs)):
+            result = embedder.embed_batch(["a", "b", "c"])
+        assert len(result) == 3
+
+    def test_embed_batch_preserves_order(self, embedder) -> None:
+        """API may return embeddings out of order; result must be sorted by index."""
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        # Return in reverse order (index 1 before index 0)
+        mock_resp.json.return_value = {
+            "data": [
+                {"index": 1, "embedding": [0.2] * 768},
+                {"index": 0, "embedding": [0.1] * 768},
+            ]
+        }
+        with patch("httpx.post", return_value=mock_resp):
+            result = embedder.embed_batch(["first", "second"])
+        assert result[0][0] == pytest.approx(0.1)
+        assert result[1][0] == pytest.approx(0.2)
+
+    def test_embed_batch_splits_into_batches(self) -> None:
+        """Large inputs must be split into multiple API calls."""
+        from cerefox.embeddings.cloud import CloudEmbedder, _BATCH_SIZE
+
+        embedder = CloudEmbedder(api_key="key")
+        n = _BATCH_SIZE + 5  # one call-over
+        texts = [f"text {i}" for i in range(n)]
+
+        # Each call returns the right number of embeddings
+        call_count = [0]
+
+        def fake_post(*args, **kwargs):
+            batch = kwargs["json"]["input"]
+            call_count[0] += 1
+            return _make_openai_response([[0.0] * 768 for _ in batch])
+
+        with patch("httpx.post", side_effect=fake_post):
+            result = embedder.embed_batch(texts)
+
+        assert call_count[0] == 2  # ceil(n / BATCH_SIZE)
+        assert len(result) == n
+
+
+class TestCloudEmbedderFireworks:
+    """Verify the Fireworks-compatible configuration works correctly."""
+
+    def test_fireworks_base_url(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
+
+        embedder = CloudEmbedder(
+            api_key="fw_key",
+            base_url="https://api.fireworks.ai/inference/v1",
+            model="nomic-ai/nomic-embed-text-v1.5",
+            dimensions=768,
+        )
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 768])) as mock_post:
             embedder.embed("test")
-
         called_url = mock_post.call_args[0][0]
-        assert not called_url.endswith("//"), "Double slash in URL"
-        assert called_url == "http://localhost:11434/api/embeddings"
+        assert "fireworks.ai" in called_url
+
+    def test_fireworks_uses_correct_api_key(self) -> None:
+        from cerefox.embeddings.cloud import CloudEmbedder
+
+        embedder = CloudEmbedder(
+            api_key="fw_secret",
+            base_url="https://api.fireworks.ai/inference/v1",
+            model="nomic-ai/nomic-embed-text-v1.5",
+        )
+        with patch("httpx.post", return_value=_make_openai_response([[0.0] * 768])) as mock_post:
+            embedder.embed("test")
+        headers = mock_post.call_args[1]["headers"]
+        assert headers["Authorization"] == "Bearer fw_secret"
