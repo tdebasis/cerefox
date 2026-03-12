@@ -50,19 +50,79 @@ interface Chunk {
 // Design notes:
 //   • Short-circuit for small documents: if the entire document fits within
 //     MAX_CHUNK_CHARS, it is returned as a single chunk with no splitting.
-//     Splitting small documents at heading boundaries creates fragments too
-//     short to embed meaningfully (e.g. a 60-char H2 section). A single
-//     chunk preserves full context and produces a better embedding.
-//     Heading-aware splitting is only beneficial for large documents where
-//     precision matters more than holistic context.
-//   • No overlaps between chunks. Each heading section is already semantically
-//     self-contained via its heading breadcrumb. Overlaps caused duplicate
-//     content when chunks were concatenated for document reconstruction.
-//   • Each heading section always becomes its own chunk — small sections are
-//     never dropped or merged. The heading line is included in the chunk
-//     content, matching Python behaviour and preserving context for search.
-//   • Oversized sections (> MAX_CHUNK_CHARS) are split at paragraph boundaries
-//     with no overlap.
+//   • Greedy accumulation: sections are collected into a buffer until adding
+//     the next would exceed MAX_CHUNK_CHARS. This keeps chunks close to the
+//     target size and avoids many tiny fragments at every heading boundary.
+//   • H1 is a hard boundary: the buffer is always flushed before a new H1
+//     section, preventing content from different top-level sections mixing.
+//   • Oversized sections (> MAX_CHUNK_CHARS) are paragraph-split with no overlap.
+//   • The first section's heading metadata anchors each chunk's breadcrumb.
+//   • No overlaps between chunks — the heading breadcrumb in the content
+//     provides sufficient context. Overlaps caused duplication on reconstruction.
+
+interface Section {
+  level: number;
+  headings: string[]; // full heading stack at this section
+  heading: string;    // just the current heading text
+  content: string;    // heading line + body
+  body: string;       // body only (no heading line)
+}
+
+function parseSections(text: string): Section[] {
+  const lines = text.split("\n");
+  const sections: Section[] = [];
+  let currentHeadings: string[] = [];
+  let currentLevel = 0;
+  let bodyLines: string[] = [];
+
+  function collectSection() {
+    const body = bodyLines.join("\n").trim();
+    bodyLines = [];
+    let content: string;
+    if (currentLevel > 0) {
+      const headerLine = "#".repeat(currentLevel) + " " + (currentHeadings[currentHeadings.length - 1] ?? "");
+      content = body ? headerLine + "\n\n" + body : headerLine;
+    } else {
+      content = body;
+    }
+    if (!content.trim()) return;
+    sections.push({
+      level: currentLevel,
+      headings: [...currentHeadings],
+      heading: currentHeadings[currentHeadings.length - 1] ?? "",
+      content,
+      body,
+    });
+  }
+
+  for (const line of lines) {
+    const h1 = line.match(/^# (.+)/);
+    const h2 = line.match(/^## (.+)/);
+    const h3 = line.match(/^### (.+)/);
+
+    if (h1) {
+      collectSection();
+      currentHeadings = [h1[1].trim()];
+      currentLevel = 1;
+    } else if (h2) {
+      collectSection();
+      currentHeadings = [currentHeadings[0] ?? "", h2[1].trim()].filter(Boolean);
+      currentLevel = 2;
+    } else if (h3) {
+      collectSection();
+      currentHeadings = [
+        currentHeadings[0] ?? "",
+        currentHeadings[1] ?? "",
+        h3[1].trim(),
+      ].filter(Boolean);
+      currentLevel = 3;
+    } else {
+      bodyLines.push(line);
+    }
+  }
+  collectSection();
+  return sections;
+}
 
 function chunkMarkdown(text: string): Chunk[] {
   const trimmed = text.trim();
@@ -73,33 +133,34 @@ function chunkMarkdown(text: string): Chunk[] {
     return [makeChunk([], 0, trimmed)];
   }
 
-  const lines = trimmed.split("\n");
+  const sections = parseSections(trimmed);
   const chunks: Chunk[] = [];
-  let currentHeadings: string[] = [];
-  let currentLevel = 0;
-  let buffer: string[] = [];
 
-  function flush() {
-    const body = buffer.join("\n").trim();
-    buffer = [];
+  // Greedy accumulation buffer
+  let bufParts: string[] = [];
+  let bufHeadings: string[] = [];
+  let bufLevel = 0;
+  let bufChars = 0;
 
-    // Build content including the heading line (mirrors Python behaviour).
-    let content: string;
-    if (currentLevel > 0) {
-      const headerLine = "#".repeat(currentLevel) + " " + (currentHeadings[currentHeadings.length - 1] ?? "");
-      content = body ? headerLine + "\n\n" + body : headerLine;
-    } else {
-      content = body; // preamble: no heading line
-    }
+  function flushBuf() {
+    if (bufParts.length === 0) return;
+    chunks.push(makeChunk(bufHeadings, bufLevel, bufParts.join("\n\n")));
+    bufParts = [];
+    bufHeadings = [];
+    bufLevel = 0;
+    bufChars = 0;
+  }
 
-    if (!content.trim()) return;
+  for (const section of sections) {
+    const { level, headings, heading, content, body } = section;
 
+    // H1 is a hard boundary.
+    if (level === 1 && bufParts.length > 0) flushBuf();
+
+    // Oversized section: flush buffer, then paragraph-split.
     if (content.length > MAX_CHUNK_CHARS) {
-      // Section too large — split at paragraph boundaries (no overlap).
-      // The heading prefix is prepended to the first piece only.
-      const headerPrefix = currentLevel > 0
-        ? "#".repeat(currentLevel) + " " + (currentHeadings[currentHeadings.length - 1] ?? "") + "\n\n"
-        : "";
+      flushBuf();
+      const headerPrefix = level > 0 ? "#".repeat(level) + " " + heading + "\n\n" : "";
       const bodyToSplit = body || content;
       const paragraphs = bodyToSplit.split(/\n\n+/);
       let sub = "";
@@ -107,7 +168,7 @@ function chunkMarkdown(text: string): Chunk[] {
       for (const para of paragraphs) {
         const prefix = isFirst ? headerPrefix : "";
         if (sub.length + prefix.length + para.length + 2 > MAX_CHUNK_CHARS && sub.length > 0) {
-          chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
+          chunks.push(makeChunk(headings, level, sub.trim()));
           sub = para;
           isFirst = false;
         } else {
@@ -115,42 +176,30 @@ function chunkMarkdown(text: string): Chunk[] {
           isFirst = false;
         }
       }
-      if (sub.trim()) {
-        chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
+      if (sub.trim()) chunks.push(makeChunk(headings, level, sub.trim()));
+      continue;
+    }
+
+    // Section fits. Try to accumulate into the buffer.
+    const addition = content.length + (bufParts.length > 0 ? 2 : 0);
+
+    if (bufChars + addition <= MAX_CHUNK_CHARS) {
+      if (bufParts.length === 0) {
+        bufHeadings = headings;
+        bufLevel = level;
       }
+      bufParts.push(content);
+      bufChars += addition;
     } else {
-      // Every heading section always gets its own chunk, regardless of size.
-      chunks.push(makeChunk(currentHeadings, currentLevel, content));
+      flushBuf();
+      bufParts = [content];
+      bufHeadings = headings;
+      bufLevel = level;
+      bufChars = content.length;
     }
   }
 
-  for (const line of lines) {
-    const h1 = line.match(/^# (.+)/);
-    const h2 = line.match(/^## (.+)/);
-    const h3 = line.match(/^### (.+)/);
-
-    if (h1) {
-      flush();
-      currentHeadings = [h1[1].trim()];
-      currentLevel = 1;
-    } else if (h2) {
-      flush();
-      currentHeadings = [currentHeadings[0] ?? "", h2[1].trim()].filter(Boolean);
-      currentLevel = 2;
-    } else if (h3) {
-      flush();
-      currentHeadings = [
-        currentHeadings[0] ?? "",
-        currentHeadings[1] ?? "",
-        h3[1].trim(),
-      ].filter(Boolean);
-      currentLevel = 3;
-    } else {
-      buffer.push(line);
-    }
-  }
-  flush();
-
+  flushBuf();
   return chunks;
 }
 

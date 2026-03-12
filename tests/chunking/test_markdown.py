@@ -204,8 +204,11 @@ class TestHeadingHierarchy:
         assert h3.title == "Sub"
 
     def test_two_h2s_under_same_h1_share_parent(self) -> None:
-        text = "# Title\n\n## Alpha\n\nContent A.\n\n## Beta\n\nContent B."  # 51 chars
-        chunks = _chunk(text, max_chunk_chars=30)
+        # Use max=15 so every section is individually small but no two fit together,
+        # forcing each into its own chunk and letting us verify heading_path isolation.
+        text = "# Title\n\n## Alpha\n\nX.\n\n## Beta\n\nY."  # 35 chars
+        chunks = _chunk(text, max_chunk_chars=15)
+        # Exactly 3 chunks: H1 (7), H2 Alpha (12), H2 Beta (11).
         assert len(chunks) == 3
         alpha = chunks[1]
         beta = chunks[2]
@@ -270,11 +273,12 @@ class TestSizeManagement:
         for c in chunks:
             assert c.char_count <= 600, f"Chunk too large: {c.char_count}"
 
-    def test_heading_chunks_never_merged_regardless_of_size(self) -> None:
-        """min_chunk_chars only affects paragraph-level pieces, never heading sections.
+    def test_sections_that_dont_fit_together_stay_separate(self) -> None:
+        """When two heading sections individually fit but together would exceed
+        max_chunk_chars, they remain as separate chunks.
 
-        Both heading sections must become separate chunks even if min_chunk_chars
-        is set higher than one of them.
+        min_chunk_chars only affects paragraph-level pieces within an oversized
+        section, never the greedy accumulation of heading-bounded sections.
         """
         text = "## Normal\n\nGood amount of content here.\n\n## Tiny\n\nok"  # ~52 chars
         chunks = _chunk(text, max_chunk_chars=30, min_chunk_chars=500)
@@ -359,9 +363,119 @@ class TestNoOverlap:
 class TestPathIsolation:
     def test_chunk_heading_path_is_a_copy(self) -> None:
         """Modifying a chunk's heading_path must not affect other chunks."""
+        # Use max=20 so each section (H1=6, H2-A=17, H2-B=17) stays separate.
         text = "# Root\n\n## A\n\nContent A.\n\n## B\n\nContent B."  # 43 chars
-        chunks = _chunk(text, max_chunk_chars=30)
+        chunks = _chunk(text, max_chunk_chars=20)
+        assert len(chunks) == 3  # H1 alone, H2-A alone, H2-B alone
         original_path = list(chunks[1].heading_path)
         chunks[1].heading_path.append("MUTATED")
         assert chunks[2].heading_path != chunks[1].heading_path
         assert chunks[1].heading_path[:len(original_path)] == original_path
+
+
+# ── Greedy accumulation ───────────────────────────────────────────────────────
+#
+# Tests for the greedy section-merging strategy: small heading sections are
+# accumulated into a single chunk up to max_chunk_chars rather than each
+# becoming their own tiny chunk.
+
+
+class TestGreedyAccumulation:
+    def test_small_sections_are_merged_into_one_chunk(self) -> None:
+        """Three small H2 sections that fit together should produce one chunk."""
+        # Each section is ~15 chars; all three fit well within max=100.
+        text = "## A\n\nAlpha.\n\n## B\n\nBeta.\n\n## C\n\nGamma."
+        chunks = _chunk(text, max_chunk_chars=100)
+        assert len(chunks) == 1
+        assert "## A" in chunks[0].content
+        assert "## B" in chunks[0].content
+        assert "## C" in chunks[0].content
+
+    def test_merged_chunk_uses_first_section_heading_path(self) -> None:
+        """The heading_path of a merged chunk is anchored to the first section.
+
+        Two H2 sections (26 + 25 = 51 chars total, > max=55 with separators)
+        are merged into one chunk.  The path is taken from the first H2.
+        """
+        # Alpha=26 chars, Beta=25 chars; together 26+2+25=53 ≤ 55. They merge.
+        # Total doc = 53 chars < 55? No — shortcut fires.  Use max=50:
+        # 53 > 50, shortcut bypassed. Alpha(26)+sep(2)+Beta(25)=53 > 50. No merge.
+        # Use max=54: 53 ≤ 54, shortcut fires again. Need two sections that
+        # individually fit but text > max. Add an H1 to trigger H1 boundary:
+        #   H1 "# Doc" = 5 chars (flushed at H1 boundary)
+        #   H2 Alpha = 26 chars, H2 Beta = 25 chars; together 53 chars ≤ max=55.
+        # Full text = 5+2+26+2+25=60 chars > 55 → shortcut bypassed.
+        text = "# Doc\n\n## Alpha\n\n" + "x" * 20 + "\n\n## Beta\n\n" + "y" * 20
+        # sections: H1(5), H2-Alpha(26), H2-Beta(25).  max=55:
+        # H1→buffer, H2-Alpha accumulates (5+2+26=33≤55), H1 boundary on H2 not triggered.
+        # But when we see H2-Alpha we are NOT at H1 boundary. Buffer has H1.
+        # 5+2+26=33 ≤ 55 → H1+Alpha in buffer.
+        # H2-Beta: 33+2+25=60 > 55 → flush → chunk 0 (H1+Alpha, path=["Doc"]).
+        # chunk 1 = Beta alone, path=["Doc","Beta"].
+        # Chunk 0 has heading_path ["Doc"] (anchored to the first section = H1).
+        chunks = _chunk(text, max_chunk_chars=55)
+        assert len(chunks) == 2
+        # First chunk is H1 + Alpha merged; heading_path is H1's path.
+        assert chunks[0].heading_path == ["Doc"]
+        assert "## Alpha" in chunks[0].content
+        # Second chunk is Beta alone.
+        assert chunks[1].heading_path == ["Doc", "Beta"]
+
+    def test_sections_greedy_fill_up_to_limit(self) -> None:
+        """Sections accumulate until the next one would overflow the budget."""
+        # section A = 20 chars, section B = 20 chars, section C = 20 chars
+        # max=45: A+B fit (20+2+20=42 ≤ 45), adding C (42+2+20=64) overflows.
+        sec_a = "## A\n\n" + "x" * 14   # exactly 20 chars
+        sec_b = "## B\n\n" + "y" * 14   # exactly 20 chars
+        sec_c = "## C\n\n" + "z" * 14   # exactly 20 chars
+        text = sec_a + "\n\n" + sec_b + "\n\n" + sec_c
+        chunks = _chunk(text, max_chunk_chars=45)
+        assert len(chunks) == 2
+        assert "## A" in chunks[0].content
+        assert "## B" in chunks[0].content
+        assert "## C" in chunks[1].content
+
+    def test_h1_boundary_prevents_cross_section_merging(self) -> None:
+        """Content from two different H1 sections is never merged.
+
+        The total document is 58 chars; use max=57 so the shortcut is bypassed
+        but both groups (28 chars each) fit well within the budget.  The H1
+        boundary must still force two separate chunks.
+        """
+        text = "# Part One\n\n## Intro\n\nHello.\n\n# Part Two\n\n## Setup\n\nWorld."  # 58 chars
+        chunks = _chunk(text, max_chunk_chars=57)
+        assert len(chunks) == 2
+        assert "Part One" in chunks[0].content
+        assert "Part Two" in chunks[1].content
+        # No cross-contamination.
+        assert "Part Two" not in chunks[0].content
+        assert "Part One" not in chunks[1].content
+
+    def test_all_content_preserved_after_merging(self) -> None:
+        """Every byte of content must survive greedy accumulation."""
+        sections = [f"## Section {i}\n\nContent for section {i}." for i in range(8)]
+        text = "\n\n".join(sections)
+        chunks = _chunk(text, max_chunk_chars=200)
+        combined = "\n\n".join(c.content for c in chunks)
+        for i in range(8):
+            assert f"Content for section {i}." in combined
+
+    def test_greedy_chunks_respect_max_size(self) -> None:
+        """No merged chunk should exceed max_chunk_chars."""
+        sections = [f"## S{i}\n\n{'word ' * 20}" for i in range(15)]  # ~110 chars each
+        text = "\n\n".join(sections)
+        chunks = _chunk(text, max_chunk_chars=300)
+        for c in chunks:
+            assert c.char_count <= 300 + 5, f"Chunk exceeds max: {c.char_count}"
+
+    def test_todo_style_doc_produces_far_fewer_chunks(self) -> None:
+        """A realistic document with many small H2 sections should be packed
+        into far fewer chunks than the number of headings."""
+        # 20 sections of ~50 chars each = ~1000 chars total.
+        # With max=4000 the shortcut fires → 1 chunk.
+        # With max=200 greedy packs ~4 sections per chunk → ~5 chunks, not 20.
+        sections = [f"## Task {i}\n\nDo the thing for item {i}." for i in range(20)]
+        text = "\n\n".join(sections)
+        chunks = _chunk(text, max_chunk_chars=200)
+        # 20 sections would be 20 chunks with the old strategy; greedy packs them.
+        assert len(chunks) < 10

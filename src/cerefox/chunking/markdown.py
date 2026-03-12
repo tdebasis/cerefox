@@ -1,16 +1,35 @@
 """Heading-aware markdown chunker.
 
-Splits markdown text into chunks based on the H1 > H2 > H3 heading hierarchy.
-Each heading section becomes one chunk.  Sections that exceed *max_chunk_chars*
-are split at paragraph boundaries.  Sections smaller than *min_chunk_chars* are
-merged into the preceding chunk.
+Splits markdown text into chunks using a greedy section-accumulation strategy:
 
-No overlaps are added between chunks: each heading section is already
-semantically self-contained via its heading breadcrumb, and overlaps cause
-duplicate content when chunks are concatenated for document reconstruction.
+1. Short-circuit: if the entire document fits within *max_chunk_chars*, return
+   it as a single chunk.  Splitting small documents at heading boundaries
+   creates fragments too short to embed meaningfully.
 
-Headings deeper than H3 (H4–H6) are treated as plain body text — they do not
-create chunk boundaries.
+2. For larger documents, parse the text into H1/H2/H3 sections (preamble
+   before the first heading is treated as a level-0 section).
+
+3. Greedy accumulation: sections are collected into a buffer until adding the
+   next section would exceed *max_chunk_chars*.  When the buffer is full it is
+   flushed as one chunk, and a new buffer starts with the current section.
+   This keeps chunks close to the target size instead of creating many tiny
+   fragments at every heading boundary.
+
+4. H1 is a hard boundary: the buffer is always flushed before starting a new
+   H1 section, preventing content from different top-level sections from
+   being mixed into one chunk.
+
+5. Oversized sections (a single heading section that already exceeds
+   *max_chunk_chars*) are split at paragraph boundaries.  Resulting pieces
+   smaller than *min_chunk_chars* are merged into the preceding piece.
+
+6. Headings deeper than H3 (H4–H6) are treated as plain body text — they do
+   not create chunk boundaries.
+
+No overlaps are added between chunks: the heading breadcrumb embedded in the
+content provides sufficient context for each chunk when read in isolation.
+Overlaps cause duplicate content when chunks are concatenated for document
+reconstruction.
 """
 
 from __future__ import annotations
@@ -32,9 +51,9 @@ class ChunkData:
 
     chunk_index: int
     heading_path: list[str]
-    heading_level: int  # 0 = no heading (preamble), 1–3 = H1–H3
-    title: str          # last element of heading_path, or "" for preamble
-    content: str        # full text (includes the heading line for non-preamble chunks)
+    heading_level: int  # 0 = no heading (preamble or merged), 1–3 = H1–H3
+    title: str          # last element of heading_path, or "" for preamble/merged
+    content: str        # full text (includes heading lines for non-preamble chunks)
     char_count: int
 
 
@@ -43,14 +62,16 @@ def chunk_markdown(
     max_chunk_chars: int = 4000,
     min_chunk_chars: int = 100,
 ) -> list[ChunkData]:
-    """Split *text* into heading-aware chunks.
+    """Split *text* into heading-aware chunks using greedy accumulation.
 
     Args:
         text: Raw markdown string.
-        max_chunk_chars: Maximum characters per chunk before splitting at
-            paragraph boundaries.
-        min_chunk_chars: Minimum chunk size; chunks smaller than this are
-            merged into the preceding chunk.
+        max_chunk_chars: Target maximum characters per chunk.  Sections are
+            accumulated greedily up to this limit.  A single section that
+            already exceeds the limit is split at paragraph boundaries.
+        min_chunk_chars: Minimum size for paragraph-level pieces produced when
+            splitting an oversized section.  Pieces smaller than this are
+            merged into the preceding piece.
 
     Returns:
         Ordered list of :class:`ChunkData` objects, zero-indexed.
@@ -83,9 +104,30 @@ def chunk_markdown(
     chunks: list[ChunkData] = []
     heading_stack: list[str] = []  # current breadcrumb trail
 
+    # ── Greedy accumulation buffer ────────────────────────────────────────────
+    # Sections are collected here until adding the next would exceed
+    # max_chunk_chars.  The first section's metadata (path/level/heading)
+    # anchors the chunk's breadcrumb.
+    buf_parts: list[str] = []   # content strings to be joined with "\n\n"
+    buf_path: list[str] = []    # heading_path of the first section in buffer
+    buf_level: int = 0          # heading_level of the first section
+    buf_heading: str = ""       # heading title of the first section
+    buf_chars: int = 0          # total chars in buffer (including "\n\n" separators)
+
+    def _flush_buf() -> None:
+        nonlocal buf_parts, buf_path, buf_level, buf_heading, buf_chars
+        if not buf_parts:
+            return
+        content = "\n\n".join(buf_parts)
+        _append_chunk(chunks, content, buf_path, buf_level, buf_heading, force_new=True)
+        buf_parts = []
+        buf_path = []
+        buf_level = 0
+        buf_heading = ""
+        buf_chars = 0
+
     for level, heading, body in sections:
         # Maintain the breadcrumb stack.
-        # Trim the stack to the parent level and push the new heading.
         if level > 0:
             heading_stack = heading_stack[: level - 1]
             heading_stack.append(heading)
@@ -93,7 +135,7 @@ def chunk_markdown(
         else:
             path = []
 
-        # Build the full content for this section.
+        # Build the full content string for this section.
         if level > 0:
             header_line = "#" * level + " " + heading
             content = header_line + ("\n\n" + body if body else "")
@@ -103,33 +145,51 @@ def chunk_markdown(
         if not content.strip():
             continue
 
-        if len(content) <= max_chunk_chars:
-            # Heading boundaries always produce their own chunk — never merged.
-            _append_chunk(chunks, content, path, level, heading, force_new=True)
-        else:
-            # Section too large — split at paragraph boundaries.
-            #
-            # We split the *body* only (not content) so the heading line is
-            # never flushed as a tiny standalone chunk.  The heading is
-            # prepended to the first paragraph piece, giving each piece
-            # enough context when read in isolation.
+        # H1 is a hard boundary: flush whatever is buffered before a new H1.
+        if level == 1 and buf_parts:
+            _flush_buf()
+
+        # Oversized single section: flush buffer first, then paragraph-split.
+        if len(content) > max_chunk_chars:
+            _flush_buf()
             header_prefix = ("#" * level + " " + heading + "\n\n") if level > 0 else ""
             pieces = _split_paragraphs(body, max_chunk_chars)
-
             for i, raw_piece in enumerate(pieces):
                 piece = (header_prefix + raw_piece if i == 0 else raw_piece).strip()
                 if not piece:
                     continue
-                # The first piece starts a fresh section (force_new=True).
-                # Subsequent pieces may be merged into the previous if tiny.
                 _append_chunk(
                     chunks, piece, path, level, heading,
                     force_new=(i == 0), min_chunk_chars=min_chunk_chars,
                 )
-
             if not pieces:
                 # Body was empty — heading-only content exceeded max (very rare).
                 _append_chunk(chunks, content, path, level, heading, force_new=True)
+            continue
+
+        # Section fits within max_chunk_chars.  Try to accumulate it.
+        # +2 accounts for the "\n\n" separator between accumulated parts.
+        addition = len(content) + (2 if buf_parts else 0)
+
+        if buf_chars + addition <= max_chunk_chars:
+            # Fits in the current buffer — accumulate.
+            if not buf_parts:
+                # First section in a new buffer: capture its metadata.
+                buf_path = path
+                buf_level = level
+                buf_heading = heading
+            buf_parts.append(content)
+            buf_chars += addition
+        else:
+            # Buffer would overflow — flush it, start a new buffer.
+            _flush_buf()
+            buf_parts = [content]
+            buf_path = path
+            buf_level = level
+            buf_heading = heading
+            buf_chars = len(content)
+
+    _flush_buf()
 
     # Re-number after any merges.
     for i, chunk in enumerate(chunks):
@@ -183,9 +243,9 @@ def _append_chunk(
 
     When *force_new* is ``False`` and the content is shorter than
     *min_chunk_chars*, it is merged into the previous chunk instead of
-    creating a new one.  Heading boundaries always pass ``force_new=True``
-    so that every H1/H2/H3 section becomes its own chunk regardless of size.
-    Paragraph-level pieces from oversized sections use ``force_new=False``.
+    creating a new one.  This is only used for paragraph-level pieces from
+    oversized sections, never for heading-bounded chunks (those always pass
+    ``force_new=True`` via the greedy accumulation logic).
     """
     if not force_new and len(content) < min_chunk_chars and chunks:
         prev = chunks[-1]

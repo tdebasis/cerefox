@@ -116,9 +116,10 @@ class TestIngestText:
         assert required.issubset(chunk_row.keys())
 
     def test_result_chunk_count_matches_actual(self, pipeline, mock_client, mock_embedder) -> None:
-        # Doc with 3 H2 sections — each section has enough body to exceed max_chunk_chars
-        # when combined, so heading splitting fires instead of the single-chunk shortcut.
-        body = "word " * 300  # ~1500 chars per section
+        # Doc with 3 H2 sections — each section (~3 000 chars) is large enough
+        # that no two fit together within max_chunk_chars (4 000), so greedy
+        # accumulation produces exactly 3 chunks (one per H2 section).
+        body = "word " * 600  # ~3 000 chars per section; 3000+2+3000=6002 > 4000
         text = f"## A\n\n{body}\n\n## B\n\n{body}\n\n## C\n\n{body}"
         mock_embedder.embed_batch.return_value = [[0.0] * 768] * 3
         mock_client.insert_document.return_value = {"id": "doc-001", "title": "Doc"}

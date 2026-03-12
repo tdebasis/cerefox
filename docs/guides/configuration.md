@@ -110,20 +110,17 @@ Cerefox has two access paths, and each has its own size budget:
 
 **Why 65 000 as the default?**
 
-The Supabase MCP protocol imposes a hard cap of ~65 KB per tool response. The local MCP server uses `CEREFOX_MAX_RESPONSE_BYTES` to stay safely within this limit. The Edge Function uses the same default so that both paths return an identical amount of content — a consistent experience whether an agent is using Claude Desktop (local MCP) or a ChatGPT Custom GPT (Edge Function).
-
-Even where no protocol limit exists, 65 KB is a sensible practical ceiling. Returning more content than a model can meaningfully use degrades response quality and wastes tokens. Most personal knowledge base queries need only a handful of relevant documents, not the entire corpus.
+65 KB is a sensible practical ceiling for personal knowledge base queries. Returning more content than a model can meaningfully process degrades response quality and wastes tokens. Most queries need only a handful of relevant documents, not the entire corpus. The same default is used on both access paths so behaviour is consistent whether you use Claude Desktop (local MCP) or a ChatGPT Custom GPT (Edge Function).
 
 **When to reduce it:**
-- Your MCP client has a lower limit than Supabase's (rare, but some custom clients do)
 - You want tighter, more focused responses from your AI agent
+- Your MCP client or LLM has a small context window
 
-**When to increase it (Edge Function only):**
-- You are using the Edge Function exclusively (no local MCP server) — for example, a ChatGPT Custom GPT that ingests large reference documents
-- Your LLM client's context window is large enough to handle the extra content usefully
-- Pass `max_bytes` in the request body: `{ "query": "...", "max_bytes": 120000 }`
-
-> ⚠️ **Do not raise `CEREFOX_MAX_RESPONSE_BYTES` above ~65 000** if you use the Supabase MCP — the protocol will silently truncate the response, which can corrupt the JSON and confuse the agent. The limit for the Edge Function path has no such protocol constraint, which is why it is a per-request parameter rather than a server-side setting.
+**When to increase it:**
+- You are ingesting large reference documents and need more context returned per query
+- Your LLM has a large context window and can use the extra content effectively
+- For the **local MCP server**, raise `CEREFOX_MAX_RESPONSE_BYTES` in your `.env`
+- For the **Edge Function**, pass `max_bytes` in the request body: `{ "query": "...", "max_bytes": 120000 }`
 
 ---
 

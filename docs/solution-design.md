@@ -181,28 +181,35 @@ cerefox_projects (1) ──< (many) cerefox_documents (1) ──< (many) cerefox
 
 ## 3. Chunking Strategy
 
-### 3.1 Heading-Based Splitting
+### 3.1 Heading-Based Greedy Chunking
 
-All content is markdown. The chunker splits at heading boundaries to preserve semantic coherence:
+All content is markdown. The chunker uses a greedy section-accumulation strategy to keep chunks close to `MAX_CHUNK_CHARS`:
 
 ```
-Priority cascade:
-  1. Split at H1 (# ) boundaries
-  2. Within each H1 section, split at H2 (## ) boundaries
-  3. If any resulting chunk exceeds MAX_CHUNK_CHARS, split at H3 (### )
-  4. If still too large, split at paragraph boundaries with overlap
+Algorithm:
+  1. Short-circuit: if the entire document fits within MAX_CHUNK_CHARS, return
+     it as a single chunk (no splitting — preserves holistic context).
+  2. Parse the document into H1/H2/H3 sections (preamble = level 0).
+  3. Greedy accumulation: add sections to a buffer until the next section would
+     overflow MAX_CHUNK_CHARS, then flush the buffer as one chunk.
+  4. H1 is a hard boundary: always flush the buffer before a new H1 section,
+     so content from different top-level sections is never mixed.
+  5. Oversized single sections (> MAX_CHUNK_CHARS) are split at paragraph
+     boundaries. Resulting pieces below MIN_CHUNK_CHARS merge into the preceding.
 ```
+
+Headings H4–H6 are treated as plain body text and do not create boundaries.  No overlaps are added — the heading breadcrumb embedded in each chunk's content provides sufficient context, and overlaps cause duplication when chunks are concatenated for document reconstruction.
 
 ### 3.2 Chunk Metadata
 
-Each chunk carries a `heading_path` array that records its position in the document hierarchy:
+Each chunk carries a `heading_path` array anchored to the **first section** in the chunk (relevant when multiple small sections are merged):
 
 ```
 Document: "AI Agents Overview.md"
 ├── Chunk 0: heading_path=["Introduction"], heading_level=1
+│            (may contain Introduction body + small sub-sections merged in)
 ├── Chunk 1: heading_path=["Architecture", "Components"], heading_level=2
-├── Chunk 2: heading_path=["Architecture", "Data Flow"], heading_level=2
-└── Chunk 3: heading_path=["Future Work"], heading_level=1
+└── Chunk 2: heading_path=["Future Work"], heading_level=1
 ```
 
 This heading context helps agents understand where a chunk fits in the larger document, even when viewing a single search result.
@@ -211,10 +218,8 @@ This heading context helps agents understand where a chunk fits in the larger do
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| MAX_CHUNK_CHARS | 4000 | Max characters per chunk before paragraph-level splitting |
-| MIN_CHUNK_CHARS | 100 | Minimum paragraph piece size; smaller pieces are merged into the preceding chunk |
-
-**Single-chunk shortcut:** if the entire document fits within `MAX_CHUNK_CHARS`, it is returned as one chunk without any heading-based splitting. Splitting small documents at heading boundaries creates fragments too short to embed meaningfully. The shortcut is applied before heading parsing in both the Python chunker and the TypeScript Edge Function.
+| MAX_CHUNK_CHARS | 4000 | Target maximum characters per chunk. Sections accumulate up to this limit. |
+| MIN_CHUNK_CHARS | 100 | Minimum size for paragraph-level pieces within an oversized section. |
 
 ## 4. Embeddings Architecture
 
