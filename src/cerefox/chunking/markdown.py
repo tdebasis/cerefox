@@ -59,6 +59,26 @@ def chunk_markdown(
     if not stripped:
         return []
 
+    # Short-circuit: if the entire document fits within one chunk, skip
+    # heading-based splitting entirely and return a single chunk.
+    #
+    # Splitting small documents at heading boundaries creates fragments that
+    # are too short to embed meaningfully — a 60-char H2 section gives the
+    # model almost no signal.  A single chunk preserves full context and
+    # produces a better embedding.  Heading-aware splitting is only beneficial
+    # for large documents where precision matters more than holistic context.
+    if len(stripped) <= max_chunk_chars:
+        return [
+            ChunkData(
+                chunk_index=0,
+                heading_path=[],
+                heading_level=0,
+                title="",
+                content=stripped,
+                char_count=len(stripped),
+            )
+        ]
+
     sections = _parse_sections(stripped)
     chunks: list[ChunkData] = []
     heading_stack: list[str] = []  # current breadcrumb trail

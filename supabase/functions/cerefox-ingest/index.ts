@@ -48,6 +48,13 @@ interface Chunk {
 // ── Heading-aware chunker (mirrors Python logic) ───────────────────────────
 //
 // Design notes:
+//   • Short-circuit for small documents: if the entire document fits within
+//     MAX_CHUNK_CHARS, it is returned as a single chunk with no splitting.
+//     Splitting small documents at heading boundaries creates fragments too
+//     short to embed meaningfully (e.g. a 60-char H2 section). A single
+//     chunk preserves full context and produces a better embedding.
+//     Heading-aware splitting is only beneficial for large documents where
+//     precision matters more than holistic context.
 //   • No overlaps between chunks. Each heading section is already semantically
 //     self-contained via its heading breadcrumb. Overlaps caused duplicate
 //     content when chunks were concatenated for document reconstruction.
@@ -60,6 +67,11 @@ interface Chunk {
 function chunkMarkdown(text: string): Chunk[] {
   const trimmed = text.trim();
   if (!trimmed) return [];
+
+  // Short-circuit: entire document fits in one chunk — skip heading splitting.
+  if (trimmed.length <= MAX_CHUNK_CHARS) {
+    return [makeChunk([], 0, trimmed)];
+  }
 
   const lines = trimmed.split("\n");
   const chunks: Chunk[] = [];
