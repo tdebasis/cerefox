@@ -17,8 +17,18 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
  *   mode         string   optional  "hybrid" | "fts" | "docs" (default: "docs")
  *   alpha        number   optional  Semantic weight for hybrid search (default: 0.7)
  *   min_score    number   optional  Min cosine similarity (default: 0.5)
+ *   max_bytes    number   optional  Response size budget in bytes (default: 65000).
+ *                                   Results are dropped whole (never truncated mid-doc)
+ *                                   until the budget is satisfied. The response includes
+ *                                   a `truncated` flag when results were dropped.
+ *                                   65000 matches the Supabase MCP protocol limit —
+ *                                   keep this value if you also use the local MCP server
+ *                                   so both paths behave identically. Only raise it if
+ *                                   you exclusively use the Edge Function directly and
+ *                                   your LLM client can handle larger payloads.
  *
- * Response: { results: [...], query, mode, match_count, project_name? }
+ * Response: { results: [...], query, mode, match_count, project_name?,
+ *             truncated: boolean, response_bytes: number }
  *
  * Example agent prompt:
  *   "Invoke the cerefox-search edge function with query='knowledge management'
@@ -29,6 +39,11 @@ const OPENAI_EMBEDDING_URL = "https://api.openai.com/v1/embeddings";
 const OPENAI_MODEL = "text-embedding-3-small";
 const EMBEDDING_DIMENSIONS = 768;
 
+// Default response size budget — matches the Supabase MCP protocol limit so
+// that both the local MCP path and the Edge Function path behave identically
+// out of the box. Most LLMs struggle with more than ~80 KB of context anyway.
+const DEFAULT_MAX_BYTES = 65_000;
+
 interface SearchRequest {
   query: string;
   project_name?: string;
@@ -36,6 +51,7 @@ interface SearchRequest {
   mode?: "hybrid" | "fts" | "docs";
   alpha?: number;
   min_score?: number;
+  max_bytes?: number;
 }
 
 async function getEmbedding(text: string, apiKey: string): Promise<number[]> {
@@ -75,6 +91,40 @@ async function lookupProjectId(
   return data[0].id;
 }
 
+/**
+ * Apply a byte budget to an array of result rows.
+ *
+ * Each row is serialised to JSON to measure its size. Rows are included in
+ * order until the next row would push the running total over `maxBytes`.
+ * Rows are always kept or dropped whole — content is never truncated
+ * mid-document. Returns the accepted rows and a `truncated` flag.
+ */
+function applyByteBudget(
+  rows: unknown[],
+  maxBytes: number,
+): { accepted: unknown[]; truncated: boolean; usedBytes: number } {
+  const accepted: unknown[] = [];
+  let usedBytes = 0;
+  let truncated = false;
+
+  for (const row of rows) {
+    const rowBytes = new TextEncoder().encode(JSON.stringify(row)).length;
+    if (usedBytes + rowBytes > maxBytes) {
+      truncated = true;
+      break;
+    }
+    accepted.push(row);
+    usedBytes += rowBytes;
+  }
+
+  return { accepted, truncated, usedBytes };
+}
+
+const headers = {
+  "Content-Type": "application/json",
+  "Access-Control-Allow-Origin": "*",
+};
+
 Deno.serve(async (req: Request) => {
   // CORS preflight
   if (req.method === "OPTIONS") {
@@ -89,7 +139,7 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "POST required" }), {
       status: 405,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -99,17 +149,24 @@ Deno.serve(async (req: Request) => {
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
-  const { query, project_name, match_count = 5, mode = "docs", alpha = 0.7, min_score = 0.5 } =
-    body;
+  const {
+    query,
+    project_name,
+    match_count = 5,
+    mode = "docs",
+    alpha = 0.7,
+    min_score = 0.5,
+    max_bytes = DEFAULT_MAX_BYTES,
+  } = body;
 
   if (!query || typeof query !== "string" || !query.trim()) {
     return new Response(JSON.stringify({ error: "query is required" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -117,7 +174,7 @@ Deno.serve(async (req: Request) => {
   if (!openaiKey) {
     return new Response(
       JSON.stringify({ error: "OPENAI_API_KEY secret not set on this project" }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      { status: 500, headers },
     );
   }
 
@@ -132,7 +189,7 @@ Deno.serve(async (req: Request) => {
     if (!projectId) {
       return new Response(
         JSON.stringify({ error: `Project not found: ${project_name}` }),
-        { status: 404, headers: { "Content-Type": "application/json" } },
+        { status: 404, headers },
       );
     }
   }
@@ -145,7 +202,7 @@ Deno.serve(async (req: Request) => {
     } catch (err) {
       return new Response(JSON.stringify({ error: String(err) }), {
         status: 502,
-        headers: { "Content-Type": "application/json" },
+        headers,
       });
     }
   }
@@ -190,23 +247,24 @@ Deno.serve(async (req: Request) => {
   if (error) {
     return new Response(JSON.stringify({ error: `RPC error: ${error.message}` }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
+  // Apply byte budget — drop whole results (never truncate mid-doc) to stay
+  // under the limit. This mirrors the local MCP server's truncation behaviour.
+  const { accepted, truncated, usedBytes } = applyByteBudget(data ?? [], max_bytes);
+
   return new Response(
     JSON.stringify({
-      results: data ?? [],
+      results: accepted,
       query,
       mode,
       match_count,
       project_name: project_name ?? null,
+      truncated,
+      response_bytes: usedBytes,
     }),
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
-    },
+    { headers },
   );
 });

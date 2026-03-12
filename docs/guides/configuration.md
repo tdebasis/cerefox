@@ -66,15 +66,14 @@ The `cerefox-search` and `cerefox-ingest` Supabase Edge Functions handle embeddi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CEREFOX_MAX_CHUNK_CHARS` | `4000` | Maximum characters per chunk before splitting falls back to next heading level or paragraph |
-| `CEREFOX_MIN_CHUNK_CHARS` | `100` | Minimum chunk size. Chunks smaller than this are merged into the previous chunk |
-| `CEREFOX_OVERLAP_CHARS` | `200` | Character overlap added at paragraph-level splits (preserves context at boundaries). Not applied at heading boundaries — heading splits are clean. |
+| `CEREFOX_MAX_CHUNK_CHARS` | `4000` | Maximum characters per chunk before splitting at paragraph boundaries |
+| `CEREFOX_MIN_CHUNK_CHARS` | `100` | Minimum chunk size. Chunks smaller than this are merged into the preceding chunk |
 
 **Tuning advice:**
 - Smaller `MAX_CHUNK_CHARS` → more precise chunk retrieval, but more DB rows and more embedding calls
 - Larger `MAX_CHUNK_CHARS` → fewer chunks, coarser retrieval
 - Default (4000) is a good balance for typical markdown notes
-- `OVERLAP_CHARS` only has an effect when a section is long enough to require paragraph-level splitting
+- Heading-bounded chunks are always kept whole regardless of size — `MIN_CHUNK_CHARS` only affects paragraph-level splits within oversized sections
 
 ---
 
@@ -82,7 +81,7 @@ The `cerefox-search` and `cerefox-ingest` Supabase Edge Functions handle embeddi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CEREFOX_MAX_RESPONSE_BYTES` | `65000` | Maximum bytes in a single search response. Set to Supabase MCP's limit by default. Reduce if using a custom MCP client with lower limits. |
+| `CEREFOX_MAX_RESPONSE_BYTES` | `65000` | Maximum bytes in a single search response (local MCP path). See explanation below. |
 | `CEREFOX_MIN_SEARCH_SCORE` | `0.50` | Minimum cosine similarity for hybrid and semantic search results (0.0–1.0). In **hybrid search**, chunks that matched the FTS keyword operator (`@@`) always pass through regardless of their vector score — the threshold only filters vector-only results. In **semantic search**, all results are filtered. The pure **FTS search** mode is unaffected. Increase for stricter precision; decrease for wider recall. |
 
 **Score threshold guidance (OpenAI text-embedding-3-small):**
@@ -99,6 +98,32 @@ Recommended values:
 - `0.40`–`0.45` — wider recall; useful for small corpora or exploratory search
 - `0.70`–`0.80` — high precision; only very close semantic matches
 - `0.0` — disable filtering entirely (returns all RPC results, not recommended)
+
+### Response size limit — why 65 000 bytes?
+
+Cerefox has two access paths, and each has its own size budget:
+
+| Path | Where the limit is configured |
+|------|-------------------------------|
+| Local MCP server (`cerefox mcp`) | `CEREFOX_MAX_RESPONSE_BYTES` in `.env` |
+| Edge Functions (`cerefox-search`) | `max_bytes` request parameter (default: 65 000) |
+
+**Why 65 000 as the default?**
+
+The Supabase MCP protocol imposes a hard cap of ~65 KB per tool response. The local MCP server uses `CEREFOX_MAX_RESPONSE_BYTES` to stay safely within this limit. The Edge Function uses the same default so that both paths return an identical amount of content — a consistent experience whether an agent is using Claude Desktop (local MCP) or a ChatGPT Custom GPT (Edge Function).
+
+Even where no protocol limit exists, 65 KB is a sensible practical ceiling. Returning more content than a model can meaningfully use degrades response quality and wastes tokens. Most personal knowledge base queries need only a handful of relevant documents, not the entire corpus.
+
+**When to reduce it:**
+- Your MCP client has a lower limit than Supabase's (rare, but some custom clients do)
+- You want tighter, more focused responses from your AI agent
+
+**When to increase it (Edge Function only):**
+- You are using the Edge Function exclusively (no local MCP server) — for example, a ChatGPT Custom GPT that ingests large reference documents
+- Your LLM client's context window is large enough to handle the extra content usefully
+- Pass `max_bytes` in the request body: `{ "query": "...", "max_bytes": 120000 }`
+
+> ⚠️ **Do not raise `CEREFOX_MAX_RESPONSE_BYTES` above ~65 000** if you use the Supabase MCP — the protocol will silently truncate the response, which can corrupt the JSON and confuse the agent. The limit for the Edge Function path has no such protocol constraint, which is why it is a per-request parameter rather than a server-side setting.
 
 ---
 

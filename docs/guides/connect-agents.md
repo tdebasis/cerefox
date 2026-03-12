@@ -421,6 +421,32 @@ If the same content was already ingested (SHA-256 hash match), returns `"skipped
 | `mode` | string | `"docs"` | `"docs"` = full document results (recommended) |
 | `alpha` | number | 0.7 | Semantic weight (0 = FTS only, 1 = semantic only) |
 | `min_score` | number | 0.5 | Minimum cosine similarity threshold |
+| `max_bytes` | number | 65000 | Response size budget in bytes. Results are dropped whole (never truncated mid-document) once the budget is reached. The response includes `truncated: true` and `response_bytes` when the limit was hit. See "Response size limit" below. |
+
+**Response fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `results` | array | Matched documents or chunks |
+| `query` | string | The original query |
+| `mode` | string | Search mode used |
+| `match_count` | number | `match_count` value used |
+| `project_name` | string\|null | Project filter applied (if any) |
+| `truncated` | boolean | `true` when results were dropped to stay within `max_bytes` |
+| `response_bytes` | number | Actual bytes in the returned `results` array |
+
+**Response size limit (`max_bytes`):**
+
+The default of 65 000 bytes matches the Supabase MCP protocol's hard limit, so both the local MCP path and the Edge Function path return an identical amount of content out of the box. This is intentional — if you run both paths in parallel (e.g. Claude Desktop via local MCP + ChatGPT via GPT Actions), agents always receive the same results regardless of which path they use.
+
+Even on the Edge Function path, where no protocol ceiling exists, 65 KB is a sensible practical ceiling: returning more content than a model can meaningfully use wastes tokens and can degrade response quality. Most queries need only a handful of relevant documents.
+
+You can raise `max_bytes` on the Edge Function if you exclusively use that path and your LLM client has a large enough context window — for example for a Custom GPT ingesting large reference documents:
+```json
+{ "query": "deployment checklist", "max_bytes": 120000 }
+```
+
+Do **not** raise `CEREFOX_MAX_RESPONSE_BYTES` (the local MCP setting) above ~65 000 — the Supabase MCP protocol will silently truncate the JSON response, which can confuse the agent. See `docs/guides/configuration.md` → "Response size limit" for the full breakdown.
 
 ---
 
