@@ -165,9 +165,9 @@ class CerefoxClient:
             query = (
                 self.client.table("cerefox_documents")
                 .select(
-                    "id, title, source, source_path, metadata, chunk_count, total_chars, created_at"
+                    "id, title, source, source_path, metadata, chunk_count, total_chars, created_at, updated_at"
                 )
-                .order("created_at", desc=True)
+                .order("updated_at", desc=True)
             )
             if project_id:
                 # Resolve document IDs from the M2M junction table.

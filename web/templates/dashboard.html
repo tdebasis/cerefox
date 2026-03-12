@@ -29,7 +29,7 @@
   <figure>
     <table>
       <thead>
-        <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Size</th><th>Added</th><th></th></tr>
+        <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Size</th><th>Updated</th><th></th></tr>
       </thead>
       <tbody>
         {% for doc in recent_docs %}
@@ -43,7 +43,7 @@
           <td><code>{{ doc.source }}</code></td>
           <td>{{ doc.chunk_count }}</td>
           <td>{{ "{:,}".format(doc.total_chars) }} chars</td>
-          <td>{{ doc.created_at[:10] if doc.created_at else "—" }}</td>
+          <td>{{ doc.updated_at[:10] if doc.updated_at else (doc.created_at[:10] if doc.created_at else "—") }}</td>
           <td style="white-space:nowrap;">
             {{ action_button("Edit", href="/document/" ~ doc.id ~ "/edit", variant="secondary", size="sm") }}
             <form method="post" action="/document/{{ doc.id }}/delete" style="display:inline;margin:0;">

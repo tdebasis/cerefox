@@ -79,6 +79,7 @@ class DocResult:
     full_content: str
     chunk_count: int
     total_chars: int
+    doc_updated_at: str = ""   # ISO-8601 string; empty when not returned by the RPC
 
     @classmethod
     def from_row(cls, row: dict) -> "DocResult":
@@ -93,6 +94,7 @@ class DocResult:
             full_content=row.get("full_content") or "",
             chunk_count=int(row.get("chunk_count") or 0),
             total_chars=int(row.get("total_chars") or 0),
+            doc_updated_at=row.get("doc_updated_at") or "",
         )
 
 

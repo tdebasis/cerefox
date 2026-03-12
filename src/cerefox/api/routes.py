@@ -212,6 +212,7 @@ def search_page(
                     full_content="",
                     chunk_count=d.get("chunk_count") or 0,
                     total_chars=d.get("total_chars") or 0,
+                    doc_updated_at=d.get("updated_at") or "",
                 )
                 for d in raw
             ]

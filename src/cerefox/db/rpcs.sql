@@ -20,6 +20,9 @@ DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
 DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT);
 DROP FUNCTION IF EXISTS cerefox_reconstruct_doc(UUID);
 
+-- Drop search_docs without doc_updated_at (return type changed to add that column).
+DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT);
+
 -- ── Shared return type note ────────────────────────────────────────────────────
 -- All chunk-level search RPCs return the same shape for consistency:
 --   chunk_id, document_id, chunk_index, title, content, heading_path,
@@ -408,7 +411,8 @@ RETURNS TABLE (
     best_chunk_heading_path  TEXT[],
     full_content             TEXT,
     chunk_count              INT,
-    total_chars              INT
+    total_chars              INT,
+    doc_updated_at           TIMESTAMPTZ
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -431,16 +435,19 @@ AS $$
     ),
     best_per_doc AS (
         -- One row per document: keep the highest-scoring chunk as representative.
-        SELECT DISTINCT ON (document_id)
-            document_id,
-            heading_path    AS best_chunk_heading_path,
-            score           AS best_score,
-            doc_title,
-            doc_source,
-            doc_metadata,
-            doc_project_ids
-        FROM chunk_results
-        ORDER BY document_id, score DESC
+        -- Join cerefox_documents to pick up updated_at.
+        SELECT DISTINCT ON (cr.document_id)
+            cr.document_id,
+            cr.heading_path    AS best_chunk_heading_path,
+            cr.score           AS best_score,
+            cr.doc_title,
+            cr.doc_source,
+            cr.doc_metadata,
+            cr.doc_project_ids,
+            d.updated_at       AS doc_updated_at
+        FROM chunk_results cr
+        JOIN cerefox_documents d ON d.id = cr.document_id
+        ORDER BY cr.document_id, cr.score DESC
     ),
     top_docs AS (
         -- Rank documents by their best chunk score, then take top N.
@@ -470,7 +477,8 @@ AS $$
         td.best_chunk_heading_path,
         fd.full_content,
         fd.chunk_count,
-        fd.total_chars
+        fd.total_chars,
+        td.doc_updated_at
     FROM top_docs td
     JOIN full_docs fd ON fd.document_id = td.document_id
     ORDER BY td.best_score DESC;
