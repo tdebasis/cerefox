@@ -99,12 +99,24 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
   Note: `invoke_edge_function` does NOT exist in `@supabase/mcp-server-supabase` v0.7.0.
 - [x] **Built-in MCP server** (`cerefox mcp`) — local stdio MCP server using the MCP Python SDK;
   exposes `cerefox_search` and `cerefox_ingest` as named tools; reads `.env`; works with Claude
-  Desktop, ChatGPT Desktop, Cursor, Claude Code. Replaces the failed `mcp-server-fetch` approach.
+  Desktop, Cursor, Claude Code. Note: ChatGPT Desktop does NOT support local stdio MCP — use
+  Custom GPT + Edge Functions for all ChatGPT access.
 - [x] **ChatGPT Custom GPT (GPT Actions)** — OpenAPI spec pointing at Edge Functions; Bearer auth
   with Supabase anon key; free with ChatGPT Plus; full hybrid search from cloud ChatGPT.
 - [ ] **Remote HTTP MCP server** (Cloud Run) — deploy `cerefox mcp` to Cloud Run so cloud AI
   clients (Claude.ai web, chatgpt.com direct) get full hybrid search without Edge Functions.
   This is the key enabler for universal cloud client access.
+- [ ] **`cerefox-mcp` Edge Function** — implement the MCP JSON-RPC protocol over SSE /
+  Streamable HTTP directly as a Supabase Edge Function. This would expose Cerefox as a
+  URL-addressable MCP server to any MCP-compatible client (ChatGPT dev mode, future remote
+  clients, etc.) without deploying anything beyond Supabase.
+  Research needed before implementing:
+  - MCP transport: SSE (older spec) vs Streamable HTTP (MCP spec 2025-03-26 and later) —
+    determine which ChatGPT dev mode and other target clients actually support
+  - Authentication: MCP spec recommends OAuth 2.0 for remote servers; investigate whether
+    the Supabase anon key as a Bearer token (`Authorization: Bearer <anon-key>`) satisfies
+    MCP clients or whether a proper OAuth flow is required
+  - Supabase Edge Function limits (CPU time, response streaming) against MCP session lifecycle
 - [ ] **OpenClaw** integration — OpenClaw (open-source AI agent) MCP config; same Path A
   approach as Cursor/Claude Code; track once the tool matures.
 - [ ] Usage analytics (which tools agents call most, common query patterns)
@@ -151,6 +163,7 @@ Record important decisions here for future reference.
 | 2026-03-07 | JSONB for metadata | Evolvable without schema changes |
 | 2026-03-07 | FastAPI + Jinja2 + HTMX for web UI | Lightweight, no JS build step, still interactive |
 | 2026-03-07 | Supabase MCP as primary agent access | Zero custom server needed, agents get direct RPC access |
+| 2026-03-12 | ChatGPT Desktop excluded from local MCP path | OpenAI only supports remote MCP (SSE/streaming HTTP) — local stdio not documented or functional. All ChatGPT access uses Custom GPT + Edge Functions. |
 | 2026-03-07 | Cloud-only embeddings (OpenAI API) | Eliminates local model complexity (no PyTorch, no platform-specific wheels); low per-use cost suitable for personal use |
 | 2026-03-07 | No predefined project/category taxonomy | Open source project — users define their own categories |
 | 2026-03-07 | Tests written alongside code (not deferred) | Prevents regression accumulation; easier to test small units |
