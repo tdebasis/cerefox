@@ -175,7 +175,46 @@ All checks should show ✓. If any show ✗, re-run `python scripts/db_deploy.py
 
 ---
 
-## Step 8 — Run the Tests
+## Step 8 — Deploy Edge Functions
+
+The Edge Functions (`cerefox-search` and `cerefox-ingest`) run server-side on Supabase and handle
+embedding for cloud agents (Custom GPT, curl, scripts). You deploy them using the Supabase CLI
+via `npx` — no separate install needed, just Node.js.
+
+**First time only — authenticate and link your project:**
+
+```bash
+npx supabase login        # opens a browser tab; click "Confirm" to generate an access token
+npx supabase link         # prompts for your project ref (the ID in your Supabase dashboard URL)
+```
+
+Your project ref is in the Supabase dashboard URL:
+`https://supabase.com/dashboard/project/<project-ref>`
+
+**Deploy both functions** (from the cerefox project root):
+
+```bash
+npx supabase functions deploy cerefox-ingest
+npx supabase functions deploy cerefox-search
+```
+
+Expected output for each:
+```
+Bundling Function: cerefox-ingest
+Deploying Function: cerefox-ingest (script size: ~880kB)
+Deployed Functions on project <your-project-ref>: cerefox-ingest
+```
+
+You can verify in the Supabase Dashboard → **Edge Functions** — both functions should appear
+with a green "Active" status.
+
+> **Re-deploying after updates**: run the same two `npx supabase functions deploy` commands
+> again from the project root. `npx supabase login` and `npx supabase link` only need to be
+> run once per machine.
+
+---
+
+## Step 10 — Run the Tests
 
 Confirm everything is wired up correctly:
 
@@ -192,7 +231,7 @@ uv run pytest -m integration
 
 ---
 
-## Step 9 — Connect an AI agent (optional)
+## Step 11 — Connect an AI agent (optional)
 
 Cerefox ships a built-in MCP server that gives desktop agents named tools
 (`cerefox_search`, `cerefox_ingest`) with full hybrid search.

@@ -203,8 +203,7 @@ class TestSizeManagement:
     def test_all_paragraph_chunks_under_max(self) -> None:
         body = "\n\n".join([f"Para {i}: " + "x " * 60 for i in range(20)])
         text = f"## Section\n\n{body}"
-        # Allow some slack for overlap text prepended to subsequent chunks.
-        chunks = _chunk(text, max_chunk_chars=500, overlap_chars=0)
+        chunks = _chunk(text, max_chunk_chars=500)
         for c in chunks:
             assert c.char_count <= 600, f"Chunk too large: {c.char_count}"
 
@@ -230,7 +229,7 @@ class TestSizeManagement:
         big_body = "word " * 250    # ~1250 chars
         tiny_tail = "fin."          # 4 chars
         text = f"## Section\n\n{big_body}\n\n{tiny_tail}"
-        chunks = _chunk(text, max_chunk_chars=700, min_chunk_chars=50, overlap_chars=0)
+        chunks = _chunk(text, max_chunk_chars=700, min_chunk_chars=50)
         # The 4-char tail should be absorbed into the preceding paragraph chunk.
         for c in chunks:
             assert c.char_count >= 50, f"Chunk too small after merge: {c.char_count!r}"
@@ -253,31 +252,44 @@ class TestSizeManagement:
         assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
 
 
-# ── Overlap ───────────────────────────────────────────────────────────────────
+# ── No overlap between chunks ─────────────────────────────────────────────────
 
 
-class TestOverlap:
-    def test_overlap_prepended_to_continuation_chunk(self) -> None:
-        """When a section is split at paragraphs, the second chunk starts with
-        text from the tail of the first chunk."""
+class TestNoOverlap:
+    def test_paragraph_split_produces_no_duplicate_content(self) -> None:
+        """When a section is split at paragraph boundaries, no content from
+        one chunk should appear at the start of the next chunk."""
         long_para_a = "Alpha " * 200   # ~1200 chars
         long_para_b = "Beta " * 200    # ~1200 chars
         text = f"## Section\n\n{long_para_a}\n\n{long_para_b}"
-        chunks = _chunk(text, max_chunk_chars=1500, overlap_chars=100)
+        chunks = _chunk(text, max_chunk_chars=1500)
         assert len(chunks) >= 2
-        # Second chunk should start with something from the tail of the first.
-        tail_of_first = chunks[0].content[-100:]
-        # Overlap is a substring pulled from the first chunk's tail.
-        assert any(word in chunks[1].content for word in tail_of_first.split()[:3])
+        # The tail of the first chunk must not appear at the start of the second.
+        tail_of_first = chunks[0].content[-50:]
+        assert not chunks[1].content.startswith(tail_of_first)
 
-    def test_zero_overlap_produces_no_duplicate_content(self) -> None:
-        long_para_a = "Alpha " * 200
-        long_para_b = "Beta " * 200
-        text = f"## Section\n\n{long_para_a}\n\n{long_para_b}"
-        chunks = _chunk(text, max_chunk_chars=1500, overlap_chars=0)
-        # With 0 overlap, the content of each chunk should not be identical.
-        if len(chunks) >= 2:
-            assert chunks[0].content != chunks[1].content
+    def test_heading_chunks_have_no_overlap_prefix(self) -> None:
+        """Heading-bounded chunks must start with their own heading, not
+        content from the previous chunk."""
+        text = "# Doc\n\nPreamble content here.\n\n## Section\n\nSection content."
+        chunks = _chunk(text)
+        assert len(chunks) == 2
+        # Second chunk must start with its own heading, not preamble text.
+        assert chunks[1].content.startswith("## Section")
+
+    def test_reconstruction_has_no_duplication(self) -> None:
+        """Concatenating all chunk content should not produce duplicate lines."""
+        text = (
+            "# About\n\nIntro paragraph.\n\n"
+            "## Alpha\n\nAlpha content.\n\n"
+            "## Beta\n\nBeta content."
+        )
+        chunks = _chunk(text)
+        reconstructed = "\n\n".join(c.content for c in chunks)
+        # Each key phrase should appear exactly once.
+        assert reconstructed.count("Intro paragraph.") == 1
+        assert reconstructed.count("Alpha content.") == 1
+        assert reconstructed.count("Beta content.") == 1
 
 
 # ── Heading path isolation ────────────────────────────────────────────────────

@@ -11,6 +11,8 @@ Routes:
     GET  /document/{document_id}/edit             Edit form
     POST /document/{document_id}/edit             Handle edit submission
     POST /document/{document_id}/delete           Delete document
+    POST /document/{document_id}/update-content   Replace content by uploading a new file
+    GET  /api/check-filename                      HTMX partial: check if a filename already exists
     GET  /ingest                                  Ingest form
     POST /ingest                                  Handle paste or file upload
     GET  /projects                                Projects list
@@ -32,7 +34,7 @@ import logging
 from functools import lru_cache
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -391,6 +393,56 @@ def document_delete(
     return RedirectResponse("/", status_code=303)
 
 
+# ── Document update-content (replace file) ───────────────────────────────────
+
+
+@router.post("/document/{document_id}/update-content", response_class=HTMLResponse)
+async def document_update_content(
+    request: Request,
+    document_id: str,
+    file: UploadFile | None = File(None),
+    client: CerefoxClient = Depends(get_client),
+    embedder: Embedder | None = Depends(get_embedder),
+    settings: Settings = Depends(get_settings),
+    templates: Jinja2Templates = Depends(get_templates),
+):
+    """Replace a document's content by uploading a new file version."""
+    ctx: dict[str, Any] = {"success": False, "error": None, "reindexed": False}
+
+    if embedder is None:
+        ctx["error"] = "Embedder not available — cannot re-index document."
+        return _render(templates, request, "partials/update_result.html", ctx)
+
+    if file is None:
+        ctx["error"] = "No file provided."
+        return _render(templates, request, "partials/update_result.html", ctx)
+
+    try:
+        raw = await file.read()
+        text = raw.decode("utf-8", errors="replace")
+
+        # Use existing title from the DB (user can rename via edit form).
+        existing = client.get_document_by_id(document_id)
+        if existing is None:
+            ctx["error"] = f"Document {document_id!r} not found."
+            return _render(templates, request, "partials/update_result.html", ctx)
+
+        pipeline = IngestionPipeline(client, embedder, settings)
+        result = pipeline.update_document(
+            document_id=document_id,
+            text=text,
+            title=existing.get("title", file.filename or "Untitled"),
+        )
+        ctx["success"] = True
+        ctx["reindexed"] = result.reindexed
+        ctx["document_id"] = document_id
+    except Exception as exc:
+        logger.error("document_update_content %s failed: %s", document_id, exc)
+        ctx["error"] = str(exc)
+
+    return _render(templates, request, "partials/update_result.html", ctx)
+
+
 # ── Document edit ─────────────────────────────────────────────────────────────
 
 
@@ -513,14 +565,18 @@ async def ingest_submit(
     mode: str = Form(...),
     title: str = Form(""),
     content: str = Form(""),
+    update_existing: str = Form("0"),
     file: UploadFile | None = File(None),
     client: CerefoxClient = Depends(get_client),
     embedder: Embedder | None = Depends(get_embedder),
     settings: Settings = Depends(get_settings),
     templates: Jinja2Templates = Depends(get_templates),
 ):
-    result_ctx: dict[str, Any] = {"success": False, "skipped": False, "error": None, "title": ""}
+    result_ctx: dict[str, Any] = {
+        "success": False, "skipped": False, "updated": False, "error": None, "title": "",
+    }
     project_ids, metadata = await _extract_ingest_form(request)
+    do_update = update_existing in ("1", "true", "on")
 
     try:
         pipeline = IngestionPipeline(client, embedder, settings)
@@ -534,10 +590,12 @@ async def ingest_submit(
                 res = pipeline.ingest_text(
                     content.strip(), title.strip(),
                     project_ids=project_ids, metadata=metadata or None,
+                    update_existing=do_update,
                 )
-                result_ctx.update(
-                    {"success": not res.skipped, "skipped": res.skipped, "title": res.title}
-                )
+                result_ctx.update({
+                    "success": not res.skipped, "skipped": res.skipped,
+                    "updated": res.reindexed, "title": res.title,
+                })
         elif mode == "file" and file:
             raw = await file.read()
             text = raw.decode("utf-8", errors="replace")
@@ -545,10 +603,12 @@ async def ingest_submit(
             res = pipeline.ingest_text(
                 text, doc_title, source="file", source_path=file.filename,
                 project_ids=project_ids, metadata=metadata or None,
+                update_existing=do_update,
             )
-            result_ctx.update(
-                {"success": not res.skipped, "skipped": res.skipped, "title": res.title}
-            )
+            result_ctx.update({
+                "success": not res.skipped, "skipped": res.skipped,
+                "updated": res.reindexed, "title": res.title,
+            })
         else:
             result_ctx["error"] = "No content provided."
     except Exception as exc:
@@ -571,6 +631,27 @@ async def ingest_submit(
         {"active": "ingest", "projects": projects, "meta_keys": meta_keys,
          "error": result_ctx["error"]},
     )
+
+
+# ── Filename check (HTMX partial) ────────────────────────────────────────────
+
+
+@router.get("/api/check-filename", response_class=HTMLResponse)
+def check_filename(
+    request: Request,
+    filename: str = Query(""),
+    client: CerefoxClient = Depends(get_client),
+    templates: Jinja2Templates = Depends(get_templates),
+):
+    """Return an HTML partial indicating whether a file with this name already exists."""
+    ctx: dict[str, Any] = {"existing_doc": None, "filename": filename}
+    if filename:
+        try:
+            doc = client.find_document_by_source_path(filename)
+            ctx["existing_doc"] = doc
+        except Exception:
+            pass  # Silently degrade — the check is advisory only
+    return _render(templates, request, "partials/filename_check.html", ctx)
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────

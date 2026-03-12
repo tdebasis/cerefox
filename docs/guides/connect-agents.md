@@ -40,7 +40,8 @@ client; you can also run both in parallel.
   and your embedding API key (`OPENAI_API_KEY`)
 
 **For Path B (Edge Functions / GPT Actions) only:**
-- Supabase Edge Functions deployed (`cerefox-search` and `cerefox-ingest`)
+- Supabase Edge Functions deployed (`cerefox-search` and `cerefox-ingest`) —
+  see `setup-supabase.md` → Step 8 for the deploy procedure (`npx supabase functions deploy`)
 - Your **anon key**: Supabase Dashboard → Project Settings → API → `anon public`
 - Your **project ref**: visible in the Supabase Dashboard URL
   (`app.supabase.com/project/<project-ref>`)
@@ -300,7 +301,7 @@ In the action editor, paste this schema (replace `<your-project-ref>`):
 openapi: 3.1.0
 info:
   title: Cerefox Knowledge Base
-  version: 1.0.0
+  version: 1.0.1
 servers:
   - url: https://<your-project-ref>.supabase.co/functions/v1
 paths:
@@ -352,6 +353,13 @@ paths:
                   default: agent
                 metadata:
                   type: object
+                update_if_exists:
+                  type: boolean
+                  default: false
+                  description: >
+                    When true, update an existing document with the same title
+                    instead of creating a new one. If content is unchanged,
+                    the document is skipped (no re-indexing).
       responses:
         '200':
           description: Ingest result
@@ -496,6 +504,7 @@ Save a note or document to the knowledge base.
 | `project_name` | string | optional | Assign to a project (created if absent) |
 | `source` | string | `"agent"` | Origin label |
 | `metadata` | object | `{}` | Arbitrary JSON metadata |
+| `update_if_exists` | boolean | `false` | When true, update an existing document with the same title instead of creating a new one. Content is re-indexed only if it changed. |
 
 ---
 

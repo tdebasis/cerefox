@@ -2,8 +2,12 @@
 
 Splits markdown text into chunks based on the H1 > H2 > H3 heading hierarchy.
 Each heading section becomes one chunk.  Sections that exceed *max_chunk_chars*
-are split at paragraph boundaries with optional overlap.  Sections smaller
-than *min_chunk_chars* are merged into the preceding chunk.
+are split at paragraph boundaries.  Sections smaller than *min_chunk_chars* are
+merged into the preceding chunk.
+
+No overlaps are added between chunks: each heading section is already
+semantically self-contained via its heading breadcrumb, and overlaps cause
+duplicate content when chunks are concatenated for document reconstruction.
 
 Headings deeper than H3 (H4–H6) are treated as plain body text — they do not
 create chunk boundaries.
@@ -38,7 +42,6 @@ def chunk_markdown(
     text: str,
     max_chunk_chars: int = 4000,
     min_chunk_chars: int = 100,
-    overlap_chars: int = 200,
 ) -> list[ChunkData]:
     """Split *text* into heading-aware chunks.
 
@@ -48,8 +51,6 @@ def chunk_markdown(
             paragraph boundaries.
         min_chunk_chars: Minimum chunk size; chunks smaller than this are
             merged into the preceding chunk.
-        overlap_chars: Characters of context prepended from the tail of a
-            completed paragraph-split chunk to the start of the next one.
 
     Returns:
         Ordered list of :class:`ChunkData` objects, zero-indexed.
@@ -93,7 +94,7 @@ def chunk_markdown(
             # prepended to the first paragraph piece, giving each piece
             # enough context when read in isolation.
             header_prefix = ("#" * level + " " + heading + "\n\n") if level > 0 else ""
-            pieces = _split_paragraphs(body, max_chunk_chars, overlap_chars)
+            pieces = _split_paragraphs(body, max_chunk_chars)
 
             for i, raw_piece in enumerate(pieces):
                 piece = (header_prefix + raw_piece if i == 0 else raw_piece).strip()
@@ -185,12 +186,13 @@ def _append_chunk(
     )
 
 
-def _split_paragraphs(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+def _split_paragraphs(text: str, max_chars: int) -> list[str]:
     """Split *text* at paragraph boundaries, keeping each piece under *max_chars*.
 
     Consecutive paragraphs are accumulated until adding the next one would
-    exceed *max_chars*.  The last *overlap_chars* characters of a completed
-    chunk are prepended to the next one to preserve context across boundaries.
+    exceed *max_chars*.  No overlap is added between pieces — the heading
+    prefix (prepended by the caller for the first piece) provides sufficient
+    context for each chunk when read in isolation.
 
     If a single paragraph is longer than *max_chars*, it is hard-split by
     character count.
@@ -203,9 +205,6 @@ def _split_paragraphs(text: str, max_chars: int, overlap_chars: int) -> list[str
     current_parts: list[str] = []
     current_len: int = 0
 
-    def _flush() -> str:
-        return "\n\n".join(current_parts)
-
     for para in paragraphs:
         # +2 accounts for the "\n\n" separator between accumulated paragraphs.
         addition = len(para) + (2 if current_parts else 0)
@@ -215,25 +214,18 @@ def _split_paragraphs(text: str, max_chars: int, overlap_chars: int) -> list[str
             current_len += addition
         else:
             if current_parts:
-                chunk_text = _flush()
-                result.append(chunk_text)
-                # Seed the next chunk with a tail overlap for context.
-                overlap = chunk_text[-overlap_chars:] if 0 < overlap_chars < len(chunk_text) else ""
-                if overlap:
-                    current_parts = [overlap, para]
-                    current_len = len(overlap) + 2 + len(para)
-                else:
-                    current_parts = [para]
-                    current_len = len(para)
+                result.append("\n\n".join(current_parts))
+                current_parts = [para]
+                current_len = len(para)
             else:
                 # A single paragraph exceeds max_chars — hard-split it.
-                step = max(max_chars - overlap_chars, max_chars // 2)
+                step = max_chars // 2
                 for start in range(0, len(para), step):
                     result.append(para[start: start + max_chars])
                 current_parts = []
                 current_len = 0
 
     if current_parts:
-        result.append(_flush())
+        result.append("\n\n".join(current_parts))
 
     return result

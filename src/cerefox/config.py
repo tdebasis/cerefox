@@ -54,7 +54,6 @@ class Settings(BaseSettings):
     # ── Chunking ──────────────────────────────────────────────────────────────
     max_chunk_chars: int = 4000
     min_chunk_chars: int = 100
-    overlap_chars: int = 200
 
     # ── Retrieval ─────────────────────────────────────────────────────────────
     max_response_bytes: int = 65000

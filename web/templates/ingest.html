@@ -102,8 +102,18 @@
 
       <label>
         File (.md, .txt, .pdf, .docx)
-        <input type="file" name="file" accept=".md,.txt,.pdf,.docx" required>
+        {# On selection, copy the bare filename to the hidden field then trigger the HTMX check #}
+        <input type="file" name="file" accept=".md,.txt,.pdf,.docx" required
+               onchange="var h=document.getElementById('_fname');h.value=this.files[0]?this.files[0].name:'';htmx.trigger(h,'change');">
       </label>
+      {# Hidden field — its value is sent as ?filename=X to the check endpoint #}
+      <input type="hidden" id="_fname" name="filename" value=""
+             hx-get="/api/check-filename"
+             hx-target="#filename-check"
+             hx-trigger="change"
+             hx-include="this">
+      {# The check partial may inject an update_existing checkbox inside this div (inside the form) #}
+      <div id="filename-check"></div>
       <button type="submit">
         <span id="file-spinner" class="htmx-indicator">…</span> Upload &amp; ingest
       </button>

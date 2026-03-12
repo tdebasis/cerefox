@@ -48,12 +48,41 @@
   </p>
 </hgroup>
 
-<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1.5rem;">
+<div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin-bottom:1.5rem;">
   {{ action_button("Edit", href="/document/" ~ doc.document_id ~ "/edit", variant="edit") }}
+  <button type="button" class="outline secondary btn-inline"
+          onclick="var s=document.getElementById('upload-section');var open=s.style.display!=='none';s.style.display=open?'none':'block';this.textContent=open?'Upload new File':'✕ Cancel upload';">
+    Upload new File
+  </button>
   <form method="post" action="/document/{{ doc.document_id }}/delete"
         style="margin:0;line-height:0;display:inline-flex;align-items:center;">
     {{ action_button("Delete", variant="danger", confirm="Delete «" ~ doc.doc_title ~ "»? This cannot be undone.") }}
   </form>
+</div>
+
+{# ── Upload new file section (hidden until button clicked) ── #}
+<div id="upload-section" style="display:none;margin-bottom:1.5rem;padding:1rem;border:1px solid var(--pico-muted-border-color);border-radius:var(--pico-border-radius);">
+  <div id="update-result"></div>
+  <form
+    hx-post="/document/{{ doc.document_id }}/update-content"
+    hx-target="#update-result"
+    hx-swap="innerHTML"
+    hx-indicator="#update-spinner"
+    enctype="multipart/form-data"
+    style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;margin:0;"
+    data-loading-modal
+  >
+    <label style="margin:0;flex:1;min-width:200px;">
+      <input type="file" name="file" accept=".md,.txt,.pdf,.docx" required style="margin:0;">
+    </label>
+    <button type="submit" class="outline secondary btn-inline" style="margin:0;">
+      <span id="update-spinner" class="htmx-indicator">…</span>
+      Upload
+    </button>
+  </form>
+  <p style="font-size:0.8rem;color:var(--pico-muted-color);margin:0.4rem 0 0;">
+    Title and project assignments are preserved. Content is re-indexed only if the file differs.
+  </p>
 </div>
 
 {% if doc.doc_metadata %}

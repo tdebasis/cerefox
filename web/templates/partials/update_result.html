@@ -1,0 +1,13 @@
+{% if success and reindexed %}
+<div class="flash-success">
+  ↑ Content replaced and re-indexed. <a href="/document/{{ document_id }}">View document</a>
+</div>
+{% elif success %}
+<div class="flash-info">
+  ✓ File uploaded — content was identical, no re-indexing needed.
+</div>
+{% elif error %}
+<div class="flash-error">
+  ⚠ {{ error }}
+</div>
+{% endif %}

@@ -1,4 +1,8 @@
-{% if success %}
+{% if success and updated %}
+<div class="flash-success">
+  ↑ Updated <strong>"{{ title }}"</strong> — content changed, chunks re-indexed.
+</div>
+{% elif success %}
 <div class="flash-success">
   ✓ Ingested <strong>"{{ title }}"</strong> successfully.
 </div>

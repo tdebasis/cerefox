@@ -5,11 +5,11 @@ Usage::
     from cerefox.ingestion.pipeline import IngestionPipeline
     from cerefox.config import Settings
     from cerefox.db.client import CerefoxClient
-    from cerefox.embeddings.mpnet import MpnetEmbedder
+    from cerefox.embeddings.cloud import CloudEmbedder
 
     settings = Settings()
     client = CerefoxClient(settings)
-    embedder = MpnetEmbedder()
+    embedder = CloudEmbedder(...)
     pipeline = IngestionPipeline(client, embedder, settings)
 
     result = pipeline.ingest_text(
@@ -84,6 +84,7 @@ class IngestionPipeline:
         project_id: str | None = None,
         project_ids: list[str] | None = None,
         metadata: dict | None = None,
+        update_existing: bool = False,
     ) -> IngestResult:
         """Ingest a raw markdown string.
 
@@ -102,10 +103,39 @@ class IngestionPipeline:
             metadata: Arbitrary key/value pairs stored as JSONB on the document.
                 When ``settings.metadata_strict`` is True, only keys registered
                 in ``cerefox_metadata_keys`` are accepted (if any are registered).
+            update_existing: When True, look up an existing document by
+                ``source_path`` (for file ingestion) or by ``title`` (for
+                paste/agent content).  If found, update it in-place instead of
+                creating a new document.  Falls through to normal create when no
+                match is found.
 
         Returns:
             :class:`IngestResult` summary.
         """
+        # ── Update-existing shortcut ───────────────────────────────────────────
+        if update_existing:
+            existing_doc: dict | None = None
+            lookup_key = "source_path" if source_path else "title"
+            if source_path:
+                existing_doc = self._client.find_document_by_source_path(source_path)
+            if existing_doc is None:
+                existing_doc = self._client.find_document_by_title(title)
+            if existing_doc is not None:
+                log.info(
+                    "update_existing: found doc %s by %s, updating in place",
+                    existing_doc["id"],
+                    lookup_key,
+                )
+                resolved_ids = self._resolve_project_ids(project_ids, project_id, project_name)
+                return self.update_document(
+                    document_id=existing_doc["id"],
+                    text=text,
+                    title=title,
+                    project_ids=resolved_ids if resolved_ids else None,
+                    metadata=metadata,
+                )
+            log.info("update_existing: no existing doc found — creating new document")
+
         # Resolve project_ids from the various caller styles.
         resolved_ids = self._resolve_project_ids(project_ids, project_id, project_name)
 
@@ -134,7 +164,6 @@ class IngestionPipeline:
             text,
             max_chunk_chars=s.max_chunk_chars,
             min_chunk_chars=s.min_chunk_chars,
-            overlap_chars=s.overlap_chars,
         )
         total_chars = sum(c.char_count for c in chunks)
 
@@ -285,7 +314,6 @@ class IngestionPipeline:
             text,
             max_chunk_chars=s.max_chunk_chars,
             min_chunk_chars=s.min_chunk_chars,
-            overlap_chars=s.overlap_chars,
         )
         total_chars = sum(c.char_count for c in chunks)
 
@@ -352,6 +380,7 @@ class IngestionPipeline:
         project_name: str | None = None,
         project_ids: list[str] | None = None,
         metadata: dict | None = None,
+        update_existing: bool = False,
     ) -> IngestResult:
         """Read a markdown file from disk and ingest it.
 
@@ -361,6 +390,9 @@ class IngestionPipeline:
             project_name: Optional project name to assign the document to.
             project_ids: Optional list of project UUIDs (M2M).
             metadata: Arbitrary JSONB metadata.
+            update_existing: When True, update an existing document with the
+                same ``source_path`` (resolved absolute path) instead of
+                creating a new document.
 
         Returns:
             :class:`IngestResult` summary.
@@ -377,6 +409,7 @@ class IngestionPipeline:
             project_name=project_name,
             project_ids=project_ids,
             metadata=metadata,
+            update_existing=update_existing,
         )
 
     # ── Private helpers ────────────────────────────────────────────────────

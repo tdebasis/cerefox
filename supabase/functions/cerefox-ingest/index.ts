@@ -27,7 +27,6 @@ const EMBEDDING_DIMENSIONS = 768;
 
 const MAX_CHUNK_CHARS = 4000;
 const MIN_CHUNK_CHARS = 100;
-const OVERLAP_CHARS = 200;
 
 interface IngestRequest {
   title: string;
@@ -35,6 +34,7 @@ interface IngestRequest {
   project_name?: string;
   source?: string;
   metadata?: Record<string, unknown>;
+  update_if_exists?: boolean;
 }
 
 interface Chunk {
@@ -45,38 +45,71 @@ interface Chunk {
   char_count: number;
 }
 
-// ── Simple heading-aware chunker (mirrors Python logic) ────────────────────
+// ── Heading-aware chunker (mirrors Python logic) ───────────────────────────
+//
+// Design notes:
+//   • No overlaps between chunks. Each heading section is already semantically
+//     self-contained via its heading breadcrumb. Overlaps caused duplicate
+//     content when chunks were concatenated for document reconstruction.
+//   • Each heading section always becomes its own chunk — small sections are
+//     never dropped or merged. The heading line is included in the chunk
+//     content, matching Python behaviour and preserving context for search.
+//   • Oversized sections (> MAX_CHUNK_CHARS) are split at paragraph boundaries
+//     with no overlap.
 
 function chunkMarkdown(text: string): Chunk[] {
-  const lines = text.split("\n");
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const lines = trimmed.split("\n");
   const chunks: Chunk[] = [];
   let currentHeadings: string[] = [];
   let currentLevel = 0;
   let buffer: string[] = [];
 
   function flush() {
-    const content = buffer.join("\n").trim();
-    if (content.length >= MIN_CHUNK_CHARS) {
-      // If chunk is oversized, split on blank lines
-      if (content.length > MAX_CHUNK_CHARS) {
-        const paragraphs = content.split(/\n\n+/);
-        let sub = "";
-        for (const para of paragraphs) {
-          if (sub.length + para.length + 2 > MAX_CHUNK_CHARS && sub.length >= MIN_CHUNK_CHARS) {
-            chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
-            sub = para;
-          } else {
-            sub = sub ? sub + "\n\n" + para : para;
-          }
-        }
-        if (sub.trim().length >= MIN_CHUNK_CHARS) {
-          chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
-        }
-      } else {
-        chunks.push(makeChunk(currentHeadings, currentLevel, content));
-      }
-    }
+    const body = buffer.join("\n").trim();
     buffer = [];
+
+    // Build content including the heading line (mirrors Python behaviour).
+    let content: string;
+    if (currentLevel > 0) {
+      const headerLine = "#".repeat(currentLevel) + " " + (currentHeadings[currentHeadings.length - 1] ?? "");
+      content = body ? headerLine + "\n\n" + body : headerLine;
+    } else {
+      content = body; // preamble: no heading line
+    }
+
+    if (!content.trim()) return;
+
+    if (content.length > MAX_CHUNK_CHARS) {
+      // Section too large — split at paragraph boundaries (no overlap).
+      // The heading prefix is prepended to the first piece only.
+      const headerPrefix = currentLevel > 0
+        ? "#".repeat(currentLevel) + " " + (currentHeadings[currentHeadings.length - 1] ?? "") + "\n\n"
+        : "";
+      const bodyToSplit = body || content;
+      const paragraphs = bodyToSplit.split(/\n\n+/);
+      let sub = "";
+      let isFirst = true;
+      for (const para of paragraphs) {
+        const prefix = isFirst ? headerPrefix : "";
+        if (sub.length + prefix.length + para.length + 2 > MAX_CHUNK_CHARS && sub.length > 0) {
+          chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
+          sub = para;
+          isFirst = false;
+        } else {
+          sub = sub ? sub + "\n\n" + para : prefix + para;
+          isFirst = false;
+        }
+      }
+      if (sub.trim()) {
+        chunks.push(makeChunk(currentHeadings, currentLevel, sub.trim()));
+      }
+    } else {
+      // Every heading section always gets its own chunk, regardless of size.
+      chunks.push(makeChunk(currentHeadings, currentLevel, content));
+    }
   }
 
   for (const line of lines) {
@@ -105,19 +138,6 @@ function chunkMarkdown(text: string): Chunk[] {
     }
   }
   flush();
-
-  // Add overlap: prepend last OVERLAP_CHARS of previous chunk to next chunk
-  for (let i = 1; i < chunks.length; i++) {
-    const prev = chunks[i - 1].content;
-    const overlap = prev.slice(-OVERLAP_CHARS);
-    if (overlap && !chunks[i].content.startsWith(overlap)) {
-      chunks[i] = {
-        ...chunks[i],
-        content: overlap + "\n\n" + chunks[i].content,
-        char_count: overlap.length + 2 + chunks[i].char_count,
-      };
-    }
-  }
 
   return chunks;
 }
@@ -192,7 +212,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const { title, content, project_name, source = "agent", metadata = {} } = body;
+  const { title, content, project_name, source = "agent", metadata = {}, update_if_exists = false } = body;
 
   if (!title?.trim() || !content?.trim()) {
     return new Response(JSON.stringify({ error: "title and content are required" }), {
@@ -213,23 +233,113 @@ Deno.serve(async (req: Request) => {
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  // Deduplication check
   const contentHash = await sha256hex(content);
-  const { data: existing } = await supabase
+  const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
+
+  // ── Update-existing path ────────────────────────────────────────────────────
+  if (update_if_exists) {
+    const { data: existing } = await supabase
+      .from("cerefox_documents")
+      .select("id, title, content_hash")
+      .eq("title", title.trim())
+      .order("updated_at", { ascending: false })
+      .limit(1);
+
+    if (existing?.length) {
+      const existingDoc = existing[0];
+
+      // Content unchanged — skip re-indexing
+      if (existingDoc.content_hash === contentHash) {
+        return new Response(
+          JSON.stringify({
+            document_id: existingDoc.id,
+            title: existingDoc.title,
+            skipped: true,
+            updated: false,
+            message: "Document already up-to-date (content hash match)",
+          }),
+          { headers },
+        );
+      }
+
+      // Content changed — re-chunk, re-embed, swap chunks
+      const chunks = chunkMarkdown(content);
+      if (chunks.length === 0) {
+        return new Response(JSON.stringify({ error: "Content produced no chunks" }), {
+          status: 422, headers,
+        });
+      }
+
+      const texts = chunks.map((c) => c.content);
+      let embeddings: number[][];
+      try {
+        embeddings = await embedBatch(texts, openaiKey);
+      } catch (err) {
+        return new Response(JSON.stringify({ error: String(err) }), { status: 502, headers });
+      }
+
+      const totalChars = chunks.reduce((s, c) => s + c.char_count, 0);
+
+      // Delete old chunks
+      await supabase.from("cerefox_chunks").delete().eq("document_id", existingDoc.id);
+
+      // Update document record
+      await supabase
+        .from("cerefox_documents")
+        .update({ content_hash: contentHash, chunk_count: chunks.length, total_chars: totalChars })
+        .eq("id", existingDoc.id);
+
+      // Insert new chunks
+      const chunkRows = chunks.map((chunk, i) => ({
+        document_id: existingDoc.id,
+        chunk_index: i,
+        heading_path: chunk.heading_path,
+        heading_level: chunk.heading_level,
+        title: chunk.title,
+        content: chunk.content,
+        char_count: chunk.char_count,
+        embedding_primary: embeddings[i],
+        embedder_primary: OPENAI_MODEL,
+      }));
+
+      const { error: chunkErr } = await supabase.from("cerefox_chunks").insert(chunkRows);
+      if (chunkErr) {
+        return new Response(
+          JSON.stringify({ error: `Failed to store updated chunks: ${chunkErr.message}` }),
+          { status: 500, headers },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          document_id: existingDoc.id,
+          title: existingDoc.title,
+          chunk_count: chunks.length,
+          total_chars: totalChars,
+          updated: true,
+        }),
+        { headers },
+      );
+    }
+    // No match found — fall through to normal create below
+  }
+
+  // ── Hash deduplication (normal create path) ────────────────────────────────
+  const { data: hashMatch } = await supabase
     .from("cerefox_documents")
     .select("id, title")
     .eq("content_hash", contentHash)
     .limit(1);
 
-  if (existing?.length) {
+  if (hashMatch?.length) {
     return new Response(
       JSON.stringify({
-        document_id: existing[0].id,
-        title: existing[0].title,
+        document_id: hashMatch[0].id,
+        title: hashMatch[0].title,
         skipped: true,
         message: "Document already exists (content hash match)",
       }),
-      { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } },
+      { headers },
     );
   }
 
@@ -238,7 +348,7 @@ Deno.serve(async (req: Request) => {
   if (chunks.length === 0) {
     return new Response(JSON.stringify({ error: "Content produced no chunks" }), {
       status: 422,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -250,7 +360,7 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 502,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -272,7 +382,7 @@ Deno.serve(async (req: Request) => {
   if (docErr || !docRows?.length) {
     return new Response(
       JSON.stringify({ error: `Failed to create document: ${docErr?.message ?? "no data"}` }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      { status: 500, headers },
     );
   }
 
@@ -324,7 +434,7 @@ Deno.serve(async (req: Request) => {
     await supabase.from("cerefox_documents").delete().eq("id", documentId);
     return new Response(
       JSON.stringify({ error: `Failed to store chunks: ${chunkErr.message}` }),
-      { status: 500, headers: { "Content-Type": "application/json" } },
+      { status: 500, headers },
     );
   }
 
@@ -339,10 +449,7 @@ Deno.serve(async (req: Request) => {
     }),
     {
       status: 201,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+      headers,
     },
   );
 });

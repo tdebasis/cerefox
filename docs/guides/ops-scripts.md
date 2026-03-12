@@ -9,7 +9,7 @@ Reference guide for the operational scripts in `scripts/`. Run these from the pr
 Applies the full Cerefox schema (tables, indexes, RPC functions) to a Postgres database.
 
 ```bash
-python scripts/db_deploy.py [OPTIONS]
+uv run python scripts/db_deploy.py [OPTIONS]
 ```
 
 | Option | Description |
@@ -23,7 +23,7 @@ Example:
 ```bash
 # Deploy to local Docker Postgres
 CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox \
-  python scripts/db_deploy.py
+  uv run python scripts/db_deploy.py
 ```
 
 ---
@@ -33,7 +33,7 @@ CEREFOX_DATABASE_URL=postgresql://cerefox:cerefox@localhost:5432/cerefox \
 Checks that the schema is correctly deployed and reports table statistics.
 
 ```bash
-python scripts/db_status.py
+uv run python scripts/db_status.py
 ```
 
 Reports:
@@ -52,7 +52,7 @@ Exit code 0 if everything is healthy; non-zero if any check fails.
 Applies incremental migrations for schema updates. Safe to run on an existing database — skips already-applied migrations.
 
 ```bash
-python scripts/db_migrate.py [OPTIONS]
+uv run python scripts/db_migrate.py [OPTIONS]
 ```
 
 | Option | Description |
@@ -62,7 +62,7 @@ python scripts/db_migrate.py [OPTIONS]
 Always run a backup before migrating:
 
 ```bash
-python scripts/backup_create.py && python scripts/db_migrate.py
+uv run python scripts/backup_create.py && uv run python scripts/db_migrate.py
 ```
 
 ---
@@ -72,7 +72,7 @@ python scripts/backup_create.py && python scripts/db_migrate.py
 Exports all documents, chunks, and metadata to a JSON file in the backup directory.
 
 ```bash
-python scripts/backup_create.py [OPTIONS]
+uv run python scripts/backup_create.py [OPTIONS]
 ```
 
 | Option | Description |
@@ -85,7 +85,7 @@ Backup filename format: `cerefox-{YYYYMMDD-HHMMSS}[-{label}].json`
 
 Example:
 ```bash
-python scripts/backup_create.py --label before-v2-migration
+uv run python scripts/backup_create.py --label before-v2-migration
 ```
 
 Output: `backups/cerefox-20260308-143022-before-v2-migration.json`
@@ -97,7 +97,7 @@ Output: `backups/cerefox-20260308-143022-before-v2-migration.json`
 Restores documents and chunks from a previously created backup file. Idempotent — documents with the same content hash are skipped.
 
 ```bash
-python scripts/backup_restore.py BACKUP_FILE [OPTIONS]
+uv run python scripts/backup_restore.py BACKUP_FILE [OPTIONS]
 ```
 
 | Option | Description |
@@ -107,10 +107,10 @@ python scripts/backup_restore.py BACKUP_FILE [OPTIONS]
 Example:
 ```bash
 # Preview what will be restored
-python scripts/backup_restore.py backups/cerefox-20260308-143022.json --dry-run
+uv run python scripts/backup_restore.py backups/cerefox-20260308-143022.json --dry-run
 
 # Restore
-python scripts/backup_restore.py backups/cerefox-20260308-143022.json
+uv run python scripts/backup_restore.py backups/cerefox-20260308-143022.json
 ```
 
 Restore output shows counts of restored / skipped / error documents.
@@ -157,7 +157,7 @@ Note: **embeddings are not stored in backups** (they are too large and can be re
 For a personal knowledge base, a simple daily cron is sufficient:
 
 ```cron
-0 3 * * * cd /path/to/cerefox && python scripts/backup_create.py --label daily
+0 3 * * * cd /path/to/cerefox && uv run python scripts/backup_create.py --label daily
 ```
 
 Backups are small (text-only, no embeddings) so retention of 30 days is typical.
@@ -170,12 +170,12 @@ The `cerefox` CLI also provides data management commands:
 
 | Command | Description |
 |---------|-------------|
-| `cerefox ingest FILE` | Ingest a markdown file |
-| `cerefox ingest --paste --title TITLE` | Ingest text from stdin |
-| `cerefox search QUERY` | Search the knowledge base |
-| `cerefox list-docs` | List all documents |
-| `cerefox delete-doc ID` | Delete a document by ID |
-| `cerefox list-projects` | List all projects |
-| `cerefox web` | Start the web UI |
+| `uv run cerefox ingest FILE` | Ingest a markdown file |
+| `uv run cerefox ingest --paste --title TITLE` | Ingest text from stdin |
+| `uv run cerefox search QUERY` | Search the knowledge base |
+| `uv run cerefox list-docs` | List all documents |
+| `uv run cerefox delete-doc ID` | Delete a document by ID |
+| `uv run cerefox list-projects` | List all projects |
+| `uv run cerefox web` | Start the web UI |
 
-Run `cerefox --help` or `cerefox COMMAND --help` for details.
+Run `uv run cerefox --help` or `uv run cerefox COMMAND --help` for details.

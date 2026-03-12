@@ -130,6 +130,15 @@ async def list_tools() -> list[types.Tool]:
                         "type": "object",
                         "description": "Optional arbitrary JSON metadata (e.g. tags)",
                     },
+                    "update_if_exists": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "When true, update an existing document with the same title "
+                            "instead of creating a new one. Useful for keeping notes in sync "
+                            "across multiple agent sessions."
+                        ),
+                    },
                 },
             },
         ),
@@ -218,10 +227,20 @@ async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[ty
         source=arguments.get("source", "agent"),
         project_name=arguments.get("project_name"),
         metadata=arguments.get("metadata") or {},
+        update_existing=bool(arguments.get("update_if_exists", False)),
     )
 
     if result.skipped:
         msg = f"Skipped (already ingested): {result.title}"
+    elif result.reindexed:
+        msg = (
+            f"Updated: {result.title}\n"
+            f"Document ID: {result.document_id}\n"
+            f"Chunks: {result.chunk_count}\n"
+            f"Total chars: {result.total_chars:,}"
+        )
+        if result.project_ids:
+            msg += f"\nProject IDs: {', '.join(result.project_ids)}"
     else:
         msg = (
             f"Ingested: {result.title}\n"

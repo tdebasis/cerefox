@@ -50,11 +50,6 @@ class TestDefaults:
             s = Settings(_env_file=None)
         assert s.min_chunk_chars == 100
 
-    def test_default_overlap_chars(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            s = Settings(_env_file=None)
-        assert s.overlap_chars == 200
-
     def test_default_max_response_bytes(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             s = Settings(_env_file=None)

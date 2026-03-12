@@ -46,9 +46,28 @@
           <td>{{ doc.updated_at[:10] if doc.updated_at else (doc.created_at[:10] if doc.created_at else "—") }}</td>
           <td style="white-space:nowrap;">
             {{ action_button("Edit", href="/document/" ~ doc.id ~ "/edit", variant="secondary", size="sm") }}
+            {# Upload button: label wraps hidden file input; selecting a file auto-submits via HTMX #}
+            <form hx-post="/document/{{ doc.id }}/update-content"
+                  hx-target="#dash-upload-{{ doc.id }}"
+                  hx-swap="innerHTML"
+                  hx-indicator="#dash-spin-{{ doc.id }}"
+                  enctype="multipart/form-data"
+                  style="display:inline;margin:0;"
+                  data-loading-modal>
+              <label class="btn-sm"
+                     style="cursor:pointer;display:inline-block;margin:0 0.25rem;vertical-align:middle;
+                            border:var(--pico-border-width,1px) solid var(--pico-secondary-border,#596b82);
+                            border-radius:var(--pico-border-radius,0.25rem);
+                            color:var(--pico-secondary,#596b82);background:transparent;">
+                <span id="dash-spin-{{ doc.id }}" class="htmx-indicator">…</span>Upload new File
+                <input type="file" name="file" accept=".md,.txt,.pdf,.docx" style="display:none;"
+                       onchange="htmx.trigger(this.closest('form'), 'submit')">
+              </label>
+            </form>
             <form method="post" action="/document/{{ doc.id }}/delete" style="display:inline;margin:0;">
               {{ action_button("Delete", variant="danger", size="sm", confirm="Delete «" ~ doc.title ~ "»?") }}
             </form>
+            <div id="dash-upload-{{ doc.id }}" style="font-size:0.75rem;white-space:normal;margin-top:0.2rem;min-width:12rem;"></div>
           </td>
         </tr>
         {% endfor %}

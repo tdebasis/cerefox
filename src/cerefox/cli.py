@@ -90,12 +90,23 @@ def _get_embedder(settings: Settings):
     default=None,
     help="Extra metadata as a JSON string, e.g. '{\"tags\":[\"work\"]}'.",
 )
+@click.option(
+    "--update",
+    is_flag=True,
+    default=False,
+    help=(
+        "Update an existing document instead of creating a new one. "
+        "Matches by source path (for files) or title (for --paste). "
+        "Falls through to a normal create when no match is found."
+    ),
+)
 def ingest(
     path: str | None,
     title: str | None,
     project: str | None,
     paste: bool,
     metadata: str | None,
+    update: bool,
 ) -> None:
     """Ingest a markdown, PDF, or DOCX file (or stdin) into the knowledge base."""
     import json  # noqa: PLC0415
@@ -128,7 +139,8 @@ def ingest(
     if paste:
         text = sys.stdin.read()
         result = pipeline.ingest_text(
-            text=text, title=title, source="paste", project_name=project, metadata=extra_meta
+            text=text, title=title, source="paste", project_name=project,
+            metadata=extra_meta, update_existing=update,
         )
     else:
         from pathlib import Path as _Path  # noqa: PLC0415
@@ -147,14 +159,25 @@ def ingest(
                 source_path=str(p),
                 project_name=project,
                 metadata=extra_meta,
+                update_existing=update,
             )
         else:
             result = pipeline.ingest_file(
-                path=path, title=title, project_name=project, metadata=extra_meta
+                path=path, title=title, project_name=project, metadata=extra_meta,
+                update_existing=update,
             )
 
     if result.skipped:
         click.echo(f"⏭  Skipped (already ingested): {result.title}")
+    elif result.reindexed:
+        click.echo(
+            f"✓  Updated: {result.title}\n"
+            f"   Document ID : {result.document_id}\n"
+            f"   Chunks      : {result.chunk_count}\n"
+            f"   Total chars : {result.total_chars:,}"
+        )
+        if result.project_ids:
+            click.echo(f"   Project IDs : {', '.join(result.project_ids)}")
     else:
         click.echo(
             f"✓  Ingested: {result.title}\n"
@@ -190,12 +213,22 @@ def ingest(
     default=False,
     help="Print files that would be ingested without actually ingesting them.",
 )
+@click.option(
+    "--update",
+    is_flag=True,
+    default=False,
+    help=(
+        "Update existing documents by source path instead of creating new ones. "
+        "Useful for re-ingesting a directory after editing files."
+    ),
+)
 def ingest_dir(
     directory: str,
     pattern: str,
     project: str | None,
     recursive: bool,
     dry_run: bool,
+    update: bool,
 ) -> None:
     """Ingest all matching files in a directory."""
     from pathlib import Path as _Path  # noqa: PLC0415
@@ -223,7 +256,7 @@ def ingest_dir(
     embedder = _get_embedder(settings)
     pipeline = IngestionPipeline(client, embedder, settings)
 
-    ingested = skipped = errors = 0
+    ingested = updated = skipped = errors = 0
     for f in files:
         try:
             if f.suffix.lower() in (".pdf", ".docx"):
@@ -234,13 +267,19 @@ def ingest_dir(
                     source="file",
                     source_path=str(f),
                     project_name=project,
+                    update_existing=update,
                 )
             else:
-                result = pipeline.ingest_file(path=str(f), project_name=project)
+                result = pipeline.ingest_file(
+                    path=str(f), project_name=project, update_existing=update
+                )
 
             if result.skipped:
                 click.echo(f"  ⏭  {f.name}  (already ingested)")
                 skipped += 1
+            elif result.reindexed:
+                click.echo(f"  ↑  {f.name}  ({result.chunk_count} chunks, updated)")
+                updated += 1
             else:
                 click.echo(f"  ✓  {f.name}  ({result.chunk_count} chunks)")
                 ingested += 1
@@ -248,7 +287,9 @@ def ingest_dir(
             click.echo(f"  ❌  {f.name}: {exc}", err=True)
             errors += 1
 
-    click.echo(f"\nDone. Ingested={ingested}  Skipped={skipped}  Errors={errors}")
+    click.echo(
+        f"\nDone. Ingested={ingested}  Updated={updated}  Skipped={skipped}  Errors={errors}"
+    )
 
 
 # ── search ────────────────────────────────────────────────────────────────────

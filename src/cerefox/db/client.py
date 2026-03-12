@@ -77,6 +77,38 @@ class CerefoxClient:
             logger.error("insert_document failed: %s", exc)
             raise RuntimeError(f"insert_document failed: {exc}") from exc
 
+    def find_document_by_source_path(self, source_path: str) -> dict[str, Any] | None:
+        """Return the most-recently-updated document whose source_path matches, or None."""
+        try:
+            response = (
+                self.client.table("cerefox_documents")
+                .select("*")
+                .eq("source_path", source_path)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("find_document_by_source_path failed: %s", exc)
+            raise RuntimeError(f"find_document_by_source_path failed: {exc}") from exc
+
+    def find_document_by_title(self, title: str) -> dict[str, Any] | None:
+        """Return the most-recently-updated document with an exact title match, or None."""
+        try:
+            response = (
+                self.client.table("cerefox_documents")
+                .select("*")
+                .eq("title", title)
+                .order("updated_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+        except Exception as exc:
+            logger.error("find_document_by_title failed: %s", exc)
+            raise RuntimeError(f"find_document_by_title failed: {exc}") from exc
+
     def get_document_by_hash(self, content_hash: str) -> dict[str, Any] | None:
         """Return the document with the given content hash, or None if not found."""
         try:
