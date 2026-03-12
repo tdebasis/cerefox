@@ -116,8 +116,10 @@ class TestIngestText:
         assert required.issubset(chunk_row.keys())
 
     def test_result_chunk_count_matches_actual(self, pipeline, mock_client, mock_embedder) -> None:
-        # Doc with 3 H2 sections.
-        text = "## A\n\nBody A.\n\n## B\n\nBody B.\n\n## C\n\nBody C."
+        # Doc with 3 H2 sections — each section has enough body to exceed max_chunk_chars
+        # when combined, so heading splitting fires instead of the single-chunk shortcut.
+        body = "word " * 300  # ~1500 chars per section
+        text = f"## A\n\n{body}\n\n## B\n\n{body}\n\n## C\n\n{body}"
         mock_embedder.embed_batch.return_value = [[0.0] * 768] * 3
         mock_client.insert_document.return_value = {"id": "doc-001", "title": "Doc"}
         result = pipeline.ingest_text(text, title="Doc")
@@ -584,3 +586,127 @@ class TestClientProjectAssignment:
 
         table_mock.delete.assert_called_once()
         table_mock.insert.assert_not_called()
+
+
+# ── update_existing flag ───────────────────────────────────────────────────────
+
+
+class TestUpdateExisting:
+    """update_existing=True should route to update_document when a match is found,
+    and fall through to normal creation when no match exists."""
+
+    @pytest.fixture()
+    def existing_doc(self) -> dict:
+        return {
+            "id": "doc-existing",
+            "title": "My Note",
+            "content_hash": "oldhash",
+            "chunk_count": 2,
+            "total_chars": 100,
+            "metadata": {},
+        }
+
+    def test_source_path_match_calls_update(
+        self, pipeline, mock_client, mock_embedder, existing_doc
+    ) -> None:
+        mock_client.find_document_by_source_path.return_value = existing_doc
+        mock_client.get_document_by_id.return_value = existing_doc
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.update_document.return_value = existing_doc
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.0] * 768]
+
+        result = pipeline.ingest_text(
+            "# My Note\n\nUpdated content.",
+            title="My Note",
+            source_path="my-note.md",
+            update_existing=True,
+        )
+
+        assert result.document_id == "doc-existing"
+        mock_client.find_document_by_source_path.assert_called_once_with("my-note.md")
+        mock_client.insert_document.assert_not_called()
+
+    def test_title_fallback_when_source_path_unset(
+        self, pipeline, mock_client, mock_embedder, existing_doc
+    ) -> None:
+        mock_client.find_document_by_title.return_value = existing_doc
+        mock_client.get_document_by_id.return_value = existing_doc
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.update_document.return_value = existing_doc
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.0] * 768]
+
+        result = pipeline.ingest_text(
+            "# My Note\n\nNew body.",
+            title="My Note",
+            update_existing=True,
+            # no source_path — should fall back to title lookup
+        )
+
+        assert result.document_id == "doc-existing"
+        mock_client.find_document_by_title.assert_called_once_with("My Note")
+        mock_client.insert_document.assert_not_called()
+
+    def test_title_fallback_when_source_path_misses(
+        self, pipeline, mock_client, mock_embedder, existing_doc
+    ) -> None:
+        """Even when source_path is provided but yields no match, title is tried."""
+        mock_client.find_document_by_source_path.return_value = None
+        mock_client.find_document_by_title.return_value = existing_doc
+        mock_client.get_document_by_id.return_value = existing_doc
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.update_document.return_value = existing_doc
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.0] * 768]
+
+        result = pipeline.ingest_text(
+            "# My Note\n\nBody.",
+            title="My Note",
+            source_path="new-name.md",
+            update_existing=True,
+        )
+
+        mock_client.find_document_by_source_path.assert_called_once()
+        mock_client.find_document_by_title.assert_called_once()
+        assert result.document_id == "doc-existing"
+
+    def test_no_match_creates_new_document(
+        self, pipeline, mock_client, mock_embedder
+    ) -> None:
+        mock_client.find_document_by_source_path.return_value = None
+        mock_client.find_document_by_title.return_value = None
+        mock_client.insert_document.return_value = {"id": "doc-new", "title": "Fresh"}
+
+        result = pipeline.ingest_text(
+            "# Fresh\n\nContent.",
+            title="Fresh",
+            source_path="fresh.md",
+            update_existing=True,
+        )
+
+        mock_client.insert_document.assert_called_once()
+        assert result.document_id == "doc-new"
+
+    def test_update_existing_false_skips_lookup(self, pipeline, mock_client) -> None:
+        """When update_existing is False (default), no lookup should happen."""
+        pipeline.ingest_text("# T\n\nB.", title="T")
+        mock_client.find_document_by_source_path.assert_not_called()
+        mock_client.find_document_by_title.assert_not_called()
+
+    def test_ingest_file_update_existing_passes_through(
+        self, pipeline, mock_client, mock_embedder, tmp_path, existing_doc
+    ) -> None:
+        md_file = tmp_path / "my-note.md"
+        md_file.write_text("# My Note\n\nFile content.", encoding="utf-8")
+        mock_client.find_document_by_source_path.return_value = existing_doc
+        mock_client.get_document_by_id.return_value = existing_doc
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.update_document.return_value = existing_doc
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.0] * 768]
+
+        result = pipeline.ingest_file(str(md_file), update_existing=True)
+
+        assert result.document_id == "doc-existing"
+        mock_client.insert_document.assert_not_called()

@@ -261,3 +261,49 @@ class TestProjectMethods:
         )
         result = cerefox_client.get_project_doc_counts(["p1", "p2"])
         assert result == {"p1": 0, "p2": 0}
+
+
+class TestLookupMethods:
+    """find_document_by_source_path and find_document_by_title should query the
+    cerefox_documents table and return the first row or None."""
+
+    def _mock_chain(self, mock_supabase_client, rows: list) -> None:
+        """Wire table().select().eq().order().limit().execute().data to *rows*."""
+        (
+            mock_supabase_client.table.return_value
+            .select.return_value
+            .eq.return_value
+            .order.return_value
+            .limit.return_value
+            .execute.return_value
+        ).data = rows
+
+    def test_find_by_source_path_returns_match(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        doc = {"id": "doc-1", "title": "Note", "source_path": "note.md"}
+        self._mock_chain(mock_supabase_client, [doc])
+        result = cerefox_client.find_document_by_source_path("note.md")
+        assert result == doc
+
+    def test_find_by_source_path_returns_none_when_missing(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        self._mock_chain(mock_supabase_client, [])
+        result = cerefox_client.find_document_by_source_path("nonexistent.md")
+        assert result is None
+
+    def test_find_by_title_returns_match(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        doc = {"id": "doc-2", "title": "My Note", "source_path": None}
+        self._mock_chain(mock_supabase_client, [doc])
+        result = cerefox_client.find_document_by_title("My Note")
+        assert result == doc
+
+    def test_find_by_title_returns_none_when_missing(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        self._mock_chain(mock_supabase_client, [])
+        result = cerefox_client.find_document_by_title("Ghost Title")
+        assert result is None

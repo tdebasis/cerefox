@@ -217,3 +217,65 @@ class TestListProjects:
             result = runner.invoke(cli, ["list-projects"])
         assert result.exit_code == 0
         assert "No projects" in result.output
+
+
+# ── ingest --update flag ──────────────────────────────────────────────────────
+
+
+class TestIngestUpdate:
+    """--update flag should pass update_existing=True to the pipeline and
+    display an 'Updated' confirmation when content was re-indexed."""
+
+    def test_update_flag_passes_update_existing_to_pipeline(self, runner, tmp_path) -> None:
+        md_file = tmp_path / "note.md"
+        md_file.write_text("# Note\n\nContent.", encoding="utf-8")
+        updated_result = IngestResult(
+            document_id="doc-abc", title="Note",
+            chunk_count=1, total_chars=100,
+            skipped=False, reindexed=True,
+        )
+        pipeline_mock = _make_pipeline_mock(updated_result)
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+            patch("cerefox.ingestion.pipeline.IngestionPipeline", return_value=pipeline_mock),
+        ):
+            result = runner.invoke(cli, ["ingest", str(md_file), "--update"])
+        assert result.exit_code == 0
+        pipeline_mock.ingest_file.assert_called_once()
+        call_kwargs = pipeline_mock.ingest_file.call_args[1]
+        assert call_kwargs.get("update_existing") is True
+
+    def test_update_reindexed_shows_updated_message(self, runner, tmp_path) -> None:
+        md_file = tmp_path / "note.md"
+        md_file.write_text("# Note\n\nContent.", encoding="utf-8")
+        updated_result = IngestResult(
+            document_id="doc-abc", title="Note",
+            chunk_count=1, total_chars=100,
+            skipped=False, reindexed=True,
+        )
+        pipeline_mock = _make_pipeline_mock(updated_result)
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+            patch("cerefox.ingestion.pipeline.IngestionPipeline", return_value=pipeline_mock),
+        ):
+            result = runner.invoke(cli, ["ingest", str(md_file), "--update"])
+        assert result.exit_code == 0
+        assert "Updated" in result.output
+
+    def test_ingest_without_update_flag_does_not_set_flag(self, runner, tmp_path) -> None:
+        md_file = tmp_path / "note.md"
+        md_file.write_text("# Note\n\nContent.", encoding="utf-8")
+        pipeline_mock = _make_pipeline_mock()
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+            patch("cerefox.ingestion.pipeline.IngestionPipeline", return_value=pipeline_mock),
+        ):
+            runner.invoke(cli, ["ingest", str(md_file)])
+        call_kwargs = pipeline_mock.ingest_file.call_args[1]
+        assert not call_kwargs.get("update_existing", False)

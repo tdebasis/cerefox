@@ -211,9 +211,10 @@ This heading context helps agents understand where a chunk fits in the larger do
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| MAX_CHUNK_CHARS | 4000 | Max characters per chunk before fallback splitting |
-| MIN_CHUNK_CHARS | 100 | Minimum chunk size (merge small sections upward) |
-| OVERLAP_CHARS | 200 | Overlap when splitting at paragraph level |
+| MAX_CHUNK_CHARS | 4000 | Max characters per chunk before paragraph-level splitting |
+| MIN_CHUNK_CHARS | 100 | Minimum paragraph piece size; smaller pieces are merged into the preceding chunk |
+
+**Single-chunk shortcut:** if the entire document fits within `MAX_CHUNK_CHARS`, it is returned as one chunk without any heading-based splitting. Splitting small documents at heading boundaries creates fragments too short to embed meaningfully. The shortcut is applied before heading parsing in both the Python chunker and the TypeScript Edge Function.
 
 ## 4. Embeddings Architecture
 

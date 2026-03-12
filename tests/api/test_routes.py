@@ -672,3 +672,148 @@ class TestSettingsPage:
         )
         assert resp.status_code == 200
         assert "constraint violation" in resp.text
+
+
+# ── check-filename API ────────────────────────────────────────────────────────
+
+
+class TestCheckFilename:
+    """GET /api/check-filename — HTMX partial for duplicate-filename detection."""
+
+    def test_returns_200_with_no_filename(self, test_client, mock_client):
+        resp = test_client.get("/api/check-filename")
+        assert resp.status_code == 200
+
+    def test_empty_filename_returns_empty_partial(self, test_client, mock_client):
+        """Empty filename → no lookup, empty HTML (no warning shown)."""
+        resp = test_client.get("/api/check-filename?filename=")
+        assert resp.status_code == 200
+        assert "Existing document" not in resp.text
+        mock_client.find_document_by_source_path.assert_not_called()
+
+    def test_no_match_returns_empty_partial(self, test_client, mock_client):
+        mock_client.find_document_by_source_path.return_value = None
+        resp = test_client.get("/api/check-filename?filename=new-note.md")
+        assert resp.status_code == 200
+        assert "Existing document" not in resp.text
+
+    def test_match_returns_warning_with_doc_title(self, test_client, mock_client):
+        mock_client.find_document_by_source_path.return_value = _make_doc(
+            title="My Existing Note"
+        )
+        resp = test_client.get("/api/check-filename?filename=test.md")
+        assert resp.status_code == 200
+        assert "Existing document" in resp.text
+        assert "My Existing Note" in resp.text
+
+    def test_match_includes_update_checkbox(self, test_client, mock_client):
+        mock_client.find_document_by_source_path.return_value = _make_doc()
+        resp = test_client.get("/api/check-filename?filename=test.md")
+        assert "update_existing" in resp.text
+
+    def test_calls_find_document_by_source_path(self, test_client, mock_client):
+        mock_client.find_document_by_source_path.return_value = None
+        test_client.get("/api/check-filename?filename=note.md")
+        mock_client.find_document_by_source_path.assert_called_once_with("note.md")
+
+    def test_degrades_gracefully_on_db_error(self, test_client, mock_client):
+        """DB errors are swallowed — the check is advisory only."""
+        mock_client.find_document_by_source_path.side_effect = RuntimeError("DB error")
+        resp = test_client.get("/api/check-filename?filename=note.md")
+        assert resp.status_code == 200
+        # No warning shown when lookup fails silently
+        assert "Existing document" not in resp.text
+
+
+# ── update-content ────────────────────────────────────────────────────────────
+
+
+class TestDocumentUpdateContent:
+    """POST /document/{id}/update-content — replace a document's file content."""
+
+    def _post_file(self, test_client, doc_id: str, content: bytes = b"# Hello\n\nContent."):
+        return test_client.post(
+            f"/document/{doc_id}/update-content",
+            files={"file": ("note.md", content, "text/plain")},
+        )
+
+    def test_returns_200_on_success(self, test_client, mock_client, mock_embedder):
+        from cerefox.ingestion.pipeline import IngestResult
+
+        mock_client.get_document_by_id.return_value = _make_doc()
+        with patch("cerefox.api.routes.IngestionPipeline") as MockPipeline:
+            MockPipeline.return_value.update_document.return_value = IngestResult(
+                document_id="doc-uuid-1", title="Test Document",
+                chunk_count=1, total_chars=100, skipped=False, reindexed=True,
+            )
+            resp = self._post_file(test_client, "doc-uuid-1")
+        assert resp.status_code == 200
+
+    def test_success_shows_reindexed_message(self, test_client, mock_client, mock_embedder):
+        from cerefox.ingestion.pipeline import IngestResult
+
+        mock_client.get_document_by_id.return_value = _make_doc()
+        with patch("cerefox.api.routes.IngestionPipeline") as MockPipeline:
+            MockPipeline.return_value.update_document.return_value = IngestResult(
+                document_id="doc-uuid-1", title="Test Document",
+                chunk_count=1, total_chars=100, skipped=False, reindexed=True,
+            )
+            resp = self._post_file(test_client, "doc-uuid-1")
+        assert "re-indexed" in resp.text or "replaced" in resp.text.lower()
+
+    def test_success_without_reindex_shows_info_message(
+        self, test_client, mock_client, mock_embedder
+    ):
+        from cerefox.ingestion.pipeline import IngestResult
+
+        mock_client.get_document_by_id.return_value = _make_doc()
+        with patch("cerefox.api.routes.IngestionPipeline") as MockPipeline:
+            MockPipeline.return_value.update_document.return_value = IngestResult(
+                document_id="doc-uuid-1", title="Test Document",
+                chunk_count=1, total_chars=100, skipped=False, reindexed=False,
+            )
+            resp = self._post_file(test_client, "doc-uuid-1")
+        assert resp.status_code == 200
+        assert "identical" in resp.text
+
+    def test_missing_file_shows_error(self, test_client, mock_client):
+        resp = test_client.post("/document/doc-uuid-1/update-content")
+        assert resp.status_code == 200
+        assert "No file" in resp.text or "error" in resp.text.lower()
+
+    def test_no_embedder_shows_error(self, test_client_no_embedder, mock_client):
+        resp = test_client_no_embedder.post(
+            "/document/doc-uuid-1/update-content",
+            files={"file": ("note.md", b"content", "text/plain")},
+        )
+        assert resp.status_code == 200
+        assert "Embedder" in resp.text or "embedder" in resp.text.lower()
+
+    def test_document_not_found_shows_error(self, test_client, mock_client):
+        mock_client.get_document_by_id.return_value = None
+        resp = self._post_file(test_client, "nonexistent-id")
+        assert resp.status_code == 200
+        assert "not found" in resp.text.lower()
+
+    def test_pipeline_error_shows_error(self, test_client, mock_client):
+        mock_client.get_document_by_id.return_value = _make_doc()
+        with patch("cerefox.api.routes.IngestionPipeline") as MockPipeline:
+            MockPipeline.return_value.update_document.side_effect = RuntimeError("Embed failed")
+            resp = self._post_file(test_client, "doc-uuid-1")
+        assert resp.status_code == 200
+        assert "Embed failed" in resp.text
+
+    def test_calls_update_document_with_correct_title(
+        self, test_client, mock_client, mock_embedder
+    ):
+        from cerefox.ingestion.pipeline import IngestResult
+
+        mock_client.get_document_by_id.return_value = _make_doc(title="My Real Title")
+        with patch("cerefox.api.routes.IngestionPipeline") as MockPipeline:
+            MockPipeline.return_value.update_document.return_value = IngestResult(
+                document_id="doc-uuid-1", title="My Real Title",
+                chunk_count=1, total_chars=100, skipped=False, reindexed=True,
+            )
+            self._post_file(test_client, "doc-uuid-1")
+        call_kwargs = MockPipeline.return_value.update_document.call_args[1]
+        assert call_kwargs.get("title") == "My Real Title"
