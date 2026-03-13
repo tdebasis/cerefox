@@ -192,9 +192,8 @@ Algorithm:
   2. Parse the document into H1/H2/H3 sections (preamble = level 0).
   3. Greedy accumulation: add sections to a buffer until the next section would
      overflow MAX_CHUNK_CHARS, then flush the buffer as one chunk.
-  4. H1 is a hard boundary: always flush the buffer before a new H1 section,
-     so content from different top-level sections is never mixed.
-  5. Oversized single sections (> MAX_CHUNK_CHARS) are split at paragraph
+     H1, H2, and H3 are treated equally — size alone controls flushing.
+  4. Oversized single sections (> MAX_CHUNK_CHARS) are split at paragraph
      boundaries. Resulting pieces below MIN_CHUNK_CHARS merge into the preceding.
 ```
 

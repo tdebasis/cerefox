@@ -435,21 +435,24 @@ class TestGreedyAccumulation:
         assert "## B" in chunks[0].content
         assert "## C" in chunks[1].content
 
-    def test_h1_boundary_prevents_cross_section_merging(self) -> None:
-        """Content from two different H1 sections is never merged.
+    def test_h1_sections_merged_like_h2(self) -> None:
+        """H1 sections accumulate greedily just like H2/H3 — no hard boundary.
 
-        The total document is 58 chars; use max=57 so the shortcut is bypassed
-        but both groups (28 chars each) fit well within the budget.  The H1
-        boundary must still force two separate chunks.
+        Documents where every section uses H1 (common in AI-generated content)
+        should be merged into larger chunks, not fragmented one-per-heading.
+
+        Three H1 sections of ~18 chars each (total 58 chars).  max=57 bypasses
+        the shortcut.  Sections 1+2 fit together (38 chars); adding section 3
+        would overflow (58 > 57), so they split into 2 chunks — not 3.
         """
-        text = "# Part One\n\n## Intro\n\nHello.\n\n# Part Two\n\n## Setup\n\nWorld."  # 58 chars
+        text = "# Part One\n\nHello.\n\n# Part Two\n\nWorld.\n\n# Part Three\n\nFoo."  # 59 chars
         chunks = _chunk(text, max_chunk_chars=57)
         assert len(chunks) == 2
+        # Sections 1 and 2 are merged into the first chunk.
         assert "Part One" in chunks[0].content
-        assert "Part Two" in chunks[1].content
-        # No cross-contamination.
-        assert "Part Two" not in chunks[0].content
-        assert "Part One" not in chunks[1].content
+        assert "Part Two" in chunks[0].content
+        # Section 3 overflows into its own chunk.
+        assert "Part Three" in chunks[1].content
 
     def test_all_content_preserved_after_merging(self) -> None:
         """Every byte of content must survive greedy accumulation."""

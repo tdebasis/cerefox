@@ -154,9 +154,6 @@ function chunkMarkdown(text: string): Chunk[] {
   for (const section of sections) {
     const { level, headings, heading, content, body } = section;
 
-    // H1 is a hard boundary.
-    if (level === 1 && bufParts.length > 0) flushBuf();
-
     // Oversized section: flush buffer, then paragraph-split.
     if (content.length > MAX_CHUNK_CHARS) {
       flushBuf();
@@ -234,7 +231,14 @@ async function embedBatch(texts: string[], apiKey: string): Promise<number[][]> 
   return sorted.map((d: { embedding: number[] }) => d.embedding);
 }
 
-// ── Content hash (SHA-256 hex) ─────────────────────────────────────────────
+// ── Content normalisation + hash (SHA-256 hex) ────────────────────────────
+// Must stay in sync with pipeline.py::_normalize / _hash.
+// Strips leading/trailing whitespace and collapses 3+ consecutive newlines to
+// two, matching the normalisation that chunk reconstruction implicitly applies.
+
+function normalizeContent(text: string): string {
+  return text.trim().replace(/\n{3,}/g, "\n\n");
+}
 
 async function sha256hex(text: string): Promise<string> {
   const bytes = new TextEncoder().encode(text);
@@ -294,7 +298,7 @@ Deno.serve(async (req: Request) => {
   const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  const contentHash = await sha256hex(content);
+  const contentHash = await sha256hex(normalizeContent(content));
   const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
 
   // ── Update-existing path ────────────────────────────────────────────────────

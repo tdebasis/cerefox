@@ -73,13 +73,12 @@ Projects and categories are created, renamed, and deleted by the user at any tim
 
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR-2.1 | Split markdown at H1 heading boundaries | P0 |
-| FR-2.2 | Within H1 sections, split at H2 boundaries | P0 |
-| FR-2.3 | Fall back to H3 splitting if chunks exceed max size | P0 |
-| FR-2.4 | Fall back to paragraph splitting with overlap if still too large | P1 |
+| FR-2.1 | Parse markdown into H1/H2/H3 sections and greedily accumulate into chunks up to MAX_CHUNK_CHARS | P0 |
+| FR-2.2 | All heading levels (H1–H3) treated equally — size alone controls chunk boundaries | P0 |
+| FR-2.3 | Oversized single sections (> MAX_CHUNK_CHARS) split at paragraph boundaries | P0 |
+| FR-2.4 | Resulting paragraph pieces below MIN_CHUNK_CHARS merged into preceding piece | P1 |
 | FR-2.5 | Preserve heading hierarchy path for each chunk | P0 |
-| FR-2.6 | Merge very small chunks upward (below minimum size) | P1 |
-| FR-2.7 | Maintain chunk ordering (chunk_index) for document reconstruction | P0 |
+| FR-2.6 | Maintain chunk ordering (chunk_index) for document reconstruction | P0 |
 
 ### FR-3: Embeddings
 

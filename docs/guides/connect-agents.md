@@ -3,6 +3,31 @@
 Cerefox exposes your knowledge base through two access paths. Choose the one that fits your
 client; you can also run both in parallel.
 
+> **Before you begin (Path A — local MCP):** your `.env` file in the root of the Cerefox
+> checkout must contain these three keys or the MCP server will fail to start:
+>
+> ```
+> CEREFOX_SUPABASE_URL=https://<your-project-ref>.supabase.co
+> CEREFOX_SUPABASE_KEY=<your-anon-key>
+> OPENAI_API_KEY=<your-openai-api-key>
+> ```
+>
+> Copy `.env.example` to `.env` and fill in the values before configuring any client.
+ If you're using a **restricted OpenAI API key**, set **Model Capabilities → Write** and
+> leave everything else as None. Do not try to narrow it to sub-scopes (e.g. "Embeddings only")
+> — OpenAI has a [known UI bug](https://community.openai.com/t/missing-scopes-model-request-on-restricted-api-key/1371602)
+> where narrowing sub-scopes after setting the top-level permission corrupts the internal
+> permission state; the key looks correct in the dashboard but returns
+> `Missing scopes: model.request` at runtime. Write on Model Capabilities is already minimal —
+> the key cannot access billing, admin, fine-tuning, or files.
+>
+> If you're on Fireworks AI instead of OpenAI, see `docs/guides/configuration.md` →
+> "Changing the embedding model".
+>
+> **Still getting a 401 on an existing key?** Open the key in the
+> [OpenAI dashboard](https://platform.openai.com/api-keys), save it without any changes, and
+> retry — this resets the internal permission state and takes effect immediately.
+
 ---
 
 ## Access paths at a glance

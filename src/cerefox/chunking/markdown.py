@@ -13,17 +13,15 @@ Splits markdown text into chunks using a greedy section-accumulation strategy:
    next section would exceed *max_chunk_chars*.  When the buffer is full it is
    flushed as one chunk, and a new buffer starts with the current section.
    This keeps chunks close to the target size instead of creating many tiny
-   fragments at every heading boundary.
+   fragments at every heading boundary.  H1, H2, and H3 sections are all
+   treated equally — there are no hard heading-level boundaries.  Size alone
+   controls when a chunk is flushed.
 
-4. H1 is a hard boundary: the buffer is always flushed before starting a new
-   H1 section, preventing content from different top-level sections from
-   being mixed into one chunk.
-
-5. Oversized sections (a single heading section that already exceeds
+4. Oversized sections (a single heading section that already exceeds
    *max_chunk_chars*) are split at paragraph boundaries.  Resulting pieces
    smaller than *min_chunk_chars* are merged into the preceding piece.
 
-6. Headings deeper than H3 (H4–H6) are treated as plain body text — they do
+5. Headings deeper than H3 (H4–H6) are treated as plain body text — they do
    not create chunk boundaries.
 
 No overlaps are added between chunks: the heading breadcrumb embedded in the
@@ -144,10 +142,6 @@ def chunk_markdown(
 
         if not content.strip():
             continue
-
-        # H1 is a hard boundary: flush whatever is buffered before a new H1.
-        if level == 1 and buf_parts:
-            _flush_buf()
 
         # Oversized single section: flush buffer first, then paragraph-split.
         if len(content) > max_chunk_chars:

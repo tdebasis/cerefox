@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from cerefox.config import Settings
-from cerefox.ingestion.pipeline import IngestResult, IngestionPipeline, _hash
+from cerefox.ingestion.pipeline import IngestResult, IngestionPipeline, _hash, _normalize
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -62,6 +62,34 @@ class TestHash:
 
     def test_different_text_different_hash(self) -> None:
         assert _hash("text A") != _hash("text B")
+
+    def test_trailing_newline_same_hash(self) -> None:
+        """Content with/without trailing newline hashes identically (strip normalisation)."""
+        assert _hash("# Doc\n\nBody.") == _hash("# Doc\n\nBody.\n")
+
+    def test_leading_whitespace_same_hash(self) -> None:
+        assert _hash("# Doc\n\nBody.") == _hash("\n# Doc\n\nBody.")
+
+    def test_excess_blank_lines_same_hash(self) -> None:
+        """3+ consecutive newlines are collapsed to 2 before hashing."""
+        assert _hash("# A\n\nBody A\n\n\n\n# B\n\nBody B") == _hash("# A\n\nBody A\n\n# B\n\nBody B")
+
+
+class TestNormalize:
+    def test_strips_trailing_newline(self) -> None:
+        assert _normalize("hello\n") == "hello"
+
+    def test_strips_leading_whitespace(self) -> None:
+        assert _normalize("\n\nhello") == "hello"
+
+    def test_collapses_triple_newlines(self) -> None:
+        assert _normalize("a\n\n\nb") == "a\n\nb"
+
+    def test_collapses_many_newlines(self) -> None:
+        assert _normalize("a\n\n\n\n\n\nb") == "a\n\nb"
+
+    def test_preserves_double_newlines(self) -> None:
+        assert _normalize("a\n\nb") == "a\n\nb"
 
 
 # ── Happy path ────────────────────────────────────────────────────────────────

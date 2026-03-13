@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -470,6 +471,18 @@ class IngestionPipeline:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _normalize(text: str) -> str:
+    """Normalise content before hashing.
+
+    Strips leading/trailing whitespace and collapses 3+ consecutive newlines to
+    two.  This matches the normalisation that chunk reconstruction implicitly
+    applies (chunks joined with '\\n\\n'), so that hashes computed at ingest
+    time (Python or TypeScript) are stable across round-trips through the edit
+    form and the Edge Function.
+    """
+    return re.sub(r"\n{3,}", "\n\n", text.strip())
+
+
 def _hash(text: str) -> str:
-    """Return a SHA-256 hex digest of the UTF-8 encoded text."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """Return a SHA-256 hex digest of the normalised UTF-8 encoded text."""
+    return hashlib.sha256(_normalize(text).encode("utf-8")).hexdigest()
