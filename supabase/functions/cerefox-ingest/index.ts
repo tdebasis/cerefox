@@ -53,8 +53,8 @@ interface Chunk {
 //   • Greedy accumulation: sections are collected into a buffer until adding
 //     the next would exceed MAX_CHUNK_CHARS. This keeps chunks close to the
 //     target size and avoids many tiny fragments at every heading boundary.
-//   • H1 is a hard boundary: the buffer is always flushed before a new H1
-//     section, preventing content from different top-level sections mixing.
+//     All heading levels (H1/H2/H3) are treated equally — size alone controls
+//     when a chunk is flushed; there are no hard heading-level boundaries.
 //   • Oversized sections (> MAX_CHUNK_CHARS) are paragraph-split with no overlap.
 //   • The first section's heading metadata anchors each chunk's breadcrumb.
 //   • No overlaps between chunks — the heading breadcrumb in the content
