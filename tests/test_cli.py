@@ -279,3 +279,97 @@ class TestIngestUpdate:
             runner.invoke(cli, ["ingest", str(md_file)])
         call_kwargs = pipeline_mock.ingest_file.call_args[1]
         assert not call_kwargs.get("update_existing", False)
+
+
+# ── ingest-dir ────────────────────────────────────────────────────────────────
+
+
+class TestIngestDir:
+    def test_ingests_matching_files(self, runner, tmp_path) -> None:
+        (tmp_path / "a.md").write_text("# A\n\nContent A.", encoding="utf-8")
+        (tmp_path / "b.md").write_text("# B\n\nContent B.", encoding="utf-8")
+        pipeline_mock = _make_pipeline_mock()
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+            patch("cerefox.ingestion.pipeline.IngestionPipeline", return_value=pipeline_mock),
+        ):
+            result = runner.invoke(cli, ["ingest-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert pipeline_mock.ingest_file.call_count == 2
+
+    def test_dry_run_does_not_ingest(self, runner, tmp_path) -> None:
+        (tmp_path / "note.md").write_text("# Note\n\nBody.", encoding="utf-8")
+        pipeline_mock = _make_pipeline_mock()
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+            patch("cerefox.ingestion.pipeline.IngestionPipeline", return_value=pipeline_mock),
+        ):
+            result = runner.invoke(cli, ["ingest-dir", str(tmp_path), "--dry-run"])
+        assert result.exit_code == 0
+        pipeline_mock.ingest_file.assert_not_called()
+
+    def test_no_matching_files_exits_cleanly(self, runner, tmp_path) -> None:
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=_make_client_mock()),
+            patch("cerefox.cli._get_embedder", return_value=MagicMock()),
+        ):
+            result = runner.invoke(cli, ["ingest-dir", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "No files" in result.output
+
+
+# ── reindex ───────────────────────────────────────────────────────────────────
+
+
+class TestReindex:
+    def _make_chunk(self, chunk_id: str, embedder: str = "old-model") -> dict:
+        return {"id": chunk_id, "content": "Some text.", "embedder_primary": embedder}
+
+    def test_nothing_to_reindex_when_all_current(self, runner) -> None:
+        client_mock = _make_client_mock()
+        client_mock.list_all_chunks.return_value = []
+        embedder_mock = MagicMock()
+        embedder_mock.model_name = "text-embedding-3-small"
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=client_mock),
+            patch("cerefox.cli._get_embedder", return_value=embedder_mock),
+        ):
+            result = runner.invoke(cli, ["reindex"])
+        assert result.exit_code == 0
+        assert "Nothing to reindex" in result.output
+
+    def test_reindexes_stale_chunks(self, runner) -> None:
+        client_mock = _make_client_mock()
+        client_mock.list_all_chunks.return_value = [
+            self._make_chunk("c-1"), self._make_chunk("c-2"),
+        ]
+        embedder_mock = MagicMock()
+        embedder_mock.model_name = "text-embedding-3-small"
+        embedder_mock.embed_batch.return_value = [[0.1] * 768, [0.2] * 768]
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=client_mock),
+            patch("cerefox.cli._get_embedder", return_value=embedder_mock),
+        ):
+            result = runner.invoke(cli, ["reindex"])
+        assert result.exit_code == 0
+        assert client_mock.update_chunk_embedding.call_count == 2
+
+    def test_reindex_all_flag_passes_none_skip_model(self, runner) -> None:
+        client_mock = _make_client_mock()
+        client_mock.list_all_chunks.return_value = []
+        embedder_mock = MagicMock()
+        embedder_mock.model_name = "text-embedding-3-small"
+        with (
+            patch("cerefox.cli.Settings"),
+            patch("cerefox.cli._get_client", return_value=client_mock),
+            patch("cerefox.cli._get_embedder", return_value=embedder_mock),
+        ):
+            runner.invoke(cli, ["reindex", "--all"])
+        client_mock.list_all_chunks.assert_called_once_with(embedder_not=None)

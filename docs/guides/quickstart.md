@@ -136,8 +136,9 @@ relevant query. Cite doc_title for every claim. Use cerefox_ingest to save anyth
 I ask you to save to the knowledge base (in md format).
 ```
 
-> **ChatGPT Desktop** uses the same MCP config format — same `cerefox` entry works.
-> **Cloud clients** (claude.ai, chatgpt.com) need a deployed server — see `docs/guides/connect-agents.md`.
+> **ChatGPT** (web or desktop) does not support local stdio MCP — use a Custom GPT with
+> Edge Functions instead (see `docs/guides/connect-agents.md` → Path B).
+> **Cloud clients** (claude.ai) need a deployed server — see `docs/guides/connect-agents.md`.
 
 For full setup details (Cursor, cloud clients, GPT Actions), see `docs/guides/connect-agents.md`.
 

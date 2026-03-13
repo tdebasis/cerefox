@@ -115,9 +115,9 @@ cerefox/
 1. **Two-table schema** (documents + chunks) instead of single flat table — enables clean document lifecycle management and small-to-big retrieval
 2. **768-dim vectors** standardized across all embedders — choose models that output 768 dims or use dimensionality reduction
 3. **JSONB metadata** on both documents and chunks — evolvable without schema changes
-4. **Heading-based chunking** (H1 > H2 > H3 fallback) — preserves semantic coherence
+4. **Greedy section accumulation** — sections (H1/H2/H3) are accumulated into a buffer until adding the next would exceed `max_chunk_chars`; no hard heading-level boundaries
 5. **Cloud-only embeddings** (OpenAI / Fireworks) — local models (mpnet, Ollama) removed; they caused platform-specific failures and added install complexity
-6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`) — embed server-side so agents never need a local embedding model; agents call via Supabase MCP `invoke_edge_function`
+6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`) — embed server-side so agents never need a local embedding model; called directly via HTTPS (not via Supabase MCP)
 
 ## Documentation as Source of Truth
 
