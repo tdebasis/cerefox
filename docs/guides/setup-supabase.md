@@ -177,9 +177,10 @@ All checks should show ✓. If any show ✗, re-run `python scripts/db_deploy.py
 
 ## Step 8 — Deploy Edge Functions
 
-The Edge Functions (`cerefox-search` and `cerefox-ingest`) run server-side on Supabase and handle
-embedding for cloud agents (Custom GPT, curl, scripts). You deploy them using the Supabase CLI
-via `npx` — no separate install needed, just Node.js.
+The Edge Functions run server-side on Supabase. `cerefox-search` and `cerefox-ingest` handle
+embedding for agents; `cerefox-mcp` wraps them as a remote MCP endpoint (recommended for
+Claude Code, Cursor, and Claude Desktop). Deploy using the Supabase CLI via `npx` — no
+separate install needed, just Node.js.
 
 **First time only — authenticate and link your project:**
 
@@ -191,11 +192,12 @@ npx supabase link         # prompts for your project ref (the ID in your Supabas
 Your project ref is in the Supabase dashboard URL:
 `https://supabase.com/dashboard/project/<project-ref>`
 
-**Deploy both functions** (from the cerefox project root):
+**Deploy all three functions** (from the cerefox project root):
 
 ```bash
 npx supabase functions deploy cerefox-ingest
 npx supabase functions deploy cerefox-search
+npx supabase functions deploy cerefox-mcp
 ```
 
 Expected output for each:
@@ -205,16 +207,16 @@ Deploying Function: cerefox-ingest (script size: ~880kB)
 Deployed Functions on project <your-project-ref>: cerefox-ingest
 ```
 
-You can verify in the Supabase Dashboard → **Edge Functions** — both functions should appear
-with a green "Active" status.
+You can verify in the Supabase Dashboard → **Edge Functions** — all three functions should
+appear with a green "Active" status.
 
-> **Re-deploying after updates**: run the same two `npx supabase functions deploy` commands
+> **Re-deploying after updates**: run the same `npx supabase functions deploy` commands
 > again from the project root. `npx supabase login` and `npx supabase link` only need to be
 > run once per machine.
 
 ---
 
-## Step 10 — Run the Tests
+## Step 9 — Run the Tests
 
 Confirm everything is wired up correctly:
 

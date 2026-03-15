@@ -19,7 +19,7 @@ Full-text search (FTS) works by indexing words and matching them against a query
 
 ### Semantic Search
 
-Semantic search uses vector embeddings to find documents by meaning rather than keywords. A query like "storing ideas outside the mind" should find documents about second brains even if those exact words do not appear. This requires an embedding model — Cerefox uses all-mpnet-base-v2 by default.
+Semantic search uses vector embeddings to find documents by meaning rather than keywords. A query like "storing ideas outside the mind" should find documents about second brains even if those exact words do not appear. This requires an embedding model — Cerefox uses OpenAI `text-embedding-3-small` (768-dim) by default.
 
 ### Hybrid Search
 

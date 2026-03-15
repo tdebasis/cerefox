@@ -74,7 +74,7 @@ client; you can also run both in parallel.
 
 ---
 
-## Path A — Local MCP server (`cerefox mcp`)
+## Path A-Local — Local MCP server (`cerefox mcp`)
 
 ### What it is
 

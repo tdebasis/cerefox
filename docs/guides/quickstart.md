@@ -136,11 +136,14 @@ relevant query. Cite doc_title for every claim. Use cerefox_ingest to save anyth
 I ask you to save to the knowledge base (in md format).
 ```
 
-> **ChatGPT** (web or desktop) does not support local stdio MCP — use a Custom GPT with
+> **Recommended: remote MCP** — if you deployed the Edge Functions (Step 5 in the main
+> README), use the remote MCP path instead — no Python install needed on the client machine.
+> See `docs/guides/connect-agents.md` → Path A-Remote.
+>
+> **ChatGPT** (web or desktop) does not support MCP — use a Custom GPT with
 > Edge Functions instead (see `docs/guides/connect-agents.md` → Path B).
-> **Cloud clients** (claude.ai) need a deployed server — see `docs/guides/connect-agents.md`.
 
-For full setup details (Cursor, cloud clients, GPT Actions), see `docs/guides/connect-agents.md`.
+For full setup details (remote MCP, Cursor, cloud clients, GPT Actions), see `docs/guides/connect-agents.md`.
 
 ---
 

@@ -28,7 +28,7 @@ const CORS_HEADERS = {
 
 const MCP_VERSION = "2025-03-26";
 const SERVER_NAME = "cerefox";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "0.1.0";
 
 // ── Tool definitions ────────────────────────────────────────────────────────
 
@@ -46,7 +46,7 @@ const TOOLS = [
           description: "Natural-language search query",
         },
         match_count: {
-          type: "number",
+          type: "integer",
           description: "Maximum number of documents to return (default: 5)",
         },
         project_name: {
@@ -232,7 +232,7 @@ async function handleToolCall(
 
     const data = await resp.json();
 
-    if (!resp.ok && resp.status !== 201) {
+    if (!resp.ok) {
       const errMsg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
       throw new Error(`cerefox-ingest error: ${errMsg}`);
     }

@@ -510,7 +510,7 @@ def metadata_keys_delete(key: str, yes: bool) -> None:
 def reindex(batch: int, reindex_all: bool) -> None:
     """Re-embed all chunks with the currently configured embedder.
 
-    Use this after switching embedders (e.g. from mpnet to OpenAI) to migrate
+    Use this after switching embedders (e.g. from OpenAI to Fireworks) to migrate
     existing content. By default, skips chunks already embedded by the current
     model. Use --all to force re-embedding of everything.
     """
