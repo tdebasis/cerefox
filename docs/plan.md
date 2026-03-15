@@ -252,28 +252,6 @@ hybrid search. Validated live with Claude Desktop.
 
 ---
 
-## Progress Log
-
-Record completed milestones here as we go.
-
-| Date | Milestone | Notes |
-|------|-----------|-------|
-| 2026-03-07 | Project kickoff | Created CLAUDE.md, solution design, plan, TODO, requirements |
-| 2026-03-07 | Iteration 1 complete | Python project, full schema SQL, search RPCs, DB client, deploy/status scripts, 40 unit tests passing, Supabase setup guide and config reference written |
-| 2026-03-07 | Iteration 2 complete | Heading-aware markdown chunker, Embedder protocol, mpnet + Ollama embedders, 52 new tests (92 total passing) |
-| 2026-03-08 | Iteration 3 complete | Ingestion pipeline, SHA-256 dedup, Click CLI (ingest/list-docs/delete-doc/list-projects), JSON backup/restore, 50 new tests (142 total passing) |
-| 2026-03-08 | Iteration 4 complete | SearchClient (hybrid/fts/semantic/reconstruct), response size management, CLI search command, cerefox_save_note RPC, agent connection guide, 22 new tests (164 total passing) |
-| 2026-03-08 | Iteration 5 complete | FastAPI web UI (dashboard/search/ingest/projects/doc-viewer), Jinja2+HTMX+Pico.css, `cerefox web` CLI command, local setup guide, ops-scripts guide, 34 new tests (198 total passing) |
-| 2026-03-08 | Iteration 6 complete | PDF+DOCX converters, cerefox_context_expand RPC, cerefox ingest-dir, git backup, 20 new tests (218 total passing) |
-| 2026-03-08 | Iteration 7 complete | Dockerfile, docker-compose.yml, Cloud Run guide, README, quickstart, contributing guide, .env.example — v0.1.0 ready |
-| 2026-03-08 | Post-release: document search | cerefox_search_docs RPC deployed; DocResult/DocSearchResponse; web UI Documents mode; test-data corpus; 236 tests passing |
-| 2026-03-11 | Iteration 8 complete | CloudEmbedder, config, CLI, Edge Functions deployed; connect-agents.md updated |
-| 2026-03-11 | Iteration 9 complete | Built-in MCP server (`cerefox mcp`); validated with Claude Desktop; ChatGPT docs added |
-| 2026-03-14 | Iteration 10 complete | cerefox-mcp Edge Function (MCP Streamable HTTP); connect-agents.md updated with Path A-Remote |
-| 2026-03-15 | Remote MCP validated | Claude Desktop (supergateway) + Claude Code (native HTTP) confirmed working; mcp-remote incompatible with Supabase (GoTrue OAuth); Edge Function auth fixed (forward caller header) |
-
----
-
 ## Iteration 10: Remote MCP Edge Function
 
 **Goal**: Give remote-capable MCP clients (Claude Code, Cursor, Claude Desktop via proxy) a
