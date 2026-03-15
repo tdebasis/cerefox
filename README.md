@@ -4,7 +4,7 @@
 
 # Cerefox
 
-**Personal second-brain knowledge base** — store your notes, thoughts, and documents in Postgres with pgvector and query them from any AI agent via MCP.
+**User-owned shared memory for AI agents** — a persistent, curated knowledge layer that multiple AI tools can read and write, backed by Postgres + pgvector.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
@@ -13,12 +13,15 @@
 
 ## What is Cerefox?
 
-Cerefox is a self-hosted knowledge base for individuals who want to:
+Cerefox is a **user-owned knowledge memory layer** — a persistent, curated knowledge base that sits between you and the AI tools you use.
 
-- **Own their data** — everything lives in a Postgres database you control
-- **Search semantically** — hybrid full-text + vector search finds relevant notes even with fuzzy queries
-- **Connect AI agents** — Claude, Cursor, and any MCP-compatible agent can read and write your knowledge base
-- **Ingest anything** — markdown files, PDFs, DOCX, or paste directly from the CLI or web UI
+The primary use case is **shared memory across AI agents**: knowledge written by one tool (Claude, ChatGPT, Cursor, or a custom agent) becomes immediately available to all others. This prevents context fragmentation — the same information doesn't have to be re-explained in every session.
+
+- **Agent-first, not human-first** — AI agents are first-class citizens on both sides: they read *and* write; humans curate and validate
+- **Own your data** — everything lives in a Postgres database you control (Supabase free tier or self-hosted)
+- **Not a note-taking app** — Cerefox is knowledge *infrastructure*, not a replacement for Obsidian, Notion, or Bear; those tools handle authoring, Cerefox handles indexing and agent access
+- **Hybrid search** — full-text + semantic search finds relevant knowledge even with fuzzy or conceptual queries
+- **Any agent, anywhere** — remote MCP via Supabase Edge Functions; ChatGPT via Custom GPT + GPT Actions
 - **Keep it cheap** — Supabase free tier + low-cost cloud embeddings; see `docs/guides/operational-cost.md`
 
 ---
@@ -28,9 +31,10 @@ Cerefox is a self-hosted knowledge base for individuals who want to:
 | Feature | Details |
 |---------|---------|
 | **Hybrid search** | Combines full-text (BM25) + semantic (vector) search with a configurable alpha weight |
-| **Heading-aware chunking** | H1 > H2 > H3 hierarchy; each heading section is a chunk with breadcrumb context |
+| **Heading-aware chunking** | Greedy section accumulation — H1/H2/H3 sections accumulate until MAX_CHUNK_CHARS; heading breadcrumb preserved per chunk |
 | **Cloud embeddings** | OpenAI `text-embedding-3-small` (768-dim) via API — or swap to Fireworks AI |
-| **Built-in MCP server** | `cerefox mcp` stdio server works with Claude Desktop, ChatGPT Desktop, Cursor, Claude Code |
+| **Remote MCP endpoint** | `cerefox-mcp` Supabase Edge Function — MCP Streamable HTTP; connect Claude Desktop, Claude Code, or Cursor with just a URL and anon key; no Python install needed |
+| **Local MCP server (legacy)** | `cerefox mcp` stdio server — fallback for offline use or development; requires Python + uv + local clone |
 | **Web UI** | FastAPI + Jinja2 + HTMX dashboard for browsing, searching, and ingesting |
 | **Multi-format ingest** | `.md`, `.txt`, `.pdf` (pypdf), `.docx` (python-docx) |
 | **Batch ingest** | `cerefox ingest-dir` recurses directories |
@@ -41,6 +45,8 @@ Cerefox is a self-hosted knowledge base for individuals who want to:
 ---
 
 ## Getting Started
+
+> **Full walkthrough**: `docs/guides/quickstart.md` — zero to first ingested document and connected agent in 15 minutes.
 
 ### 1. Clone and install
 
@@ -85,14 +91,28 @@ Open `.env` and fill in these values:
 uv run python scripts/db_deploy.py
 ```
 
-### 5. Ingest a document and open the web UI
+### 5. Deploy the Edge Functions
+
+Edge Functions handle server-side embedding so AI agents never need a local model. Requires the [Supabase CLI](https://supabase.com/docs/guides/cli).
+
+```bash
+npx supabase functions deploy cerefox-search
+npx supabase functions deploy cerefox-ingest
+npx supabase functions deploy cerefox-mcp
+```
+
+Set your OpenAI key as a Supabase secret (used by the functions at runtime):
+
+```bash
+npx supabase secrets set OPENAI_API_KEY=sk-...your-key...
+```
+
+### 6. Ingest a document and open the web UI
 
 ```bash
 uv run cerefox ingest my-notes.md --title "My notes"
 uv run cerefox web                # → http://localhost:8000
 ```
-
-Full guide: `docs/guides/quickstart.md`
 
 ---
 
@@ -116,7 +136,45 @@ Search RPCs (MCP tools): `cerefox_hybrid_search`, `cerefox_fts_search`,
 
 ## Connecting AI agents
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (same format for ChatGPT Desktop and Cursor):
+**Option 1 — Remote MCP (recommended)** — just a URL, an anon key, and `npx`:
+
+The `cerefox-mcp` Supabase Edge Function speaks MCP Streamable HTTP. No Python, no local
+repo clone — works from any machine with Node.js installed.
+
+```bash
+# Claude Code (native HTTP transport)
+claude mcp add --transport http cerefox \
+  https://<project-ref>.supabase.co/functions/v1/cerefox-mcp \
+  --header "Authorization: Bearer <anon-key>"
+```
+
+For Claude Desktop, use [`supergateway`](https://www.npmjs.com/package/supergateway) as
+a stdio-to-HTTP bridge in `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "npx",
+      "args": [
+        "-y", "supergateway",
+        "--streamableHttp", "https://<project-ref>.supabase.co/functions/v1/cerefox-mcp",
+        "--header", "Authorization: Bearer <anon-key>"
+      ]
+    }
+  }
+}
+```
+
+For Cursor, use `url` + `headers.Authorization` in `mcp.json`.
+
+**Option 2 — ChatGPT (web + desktop)** via Custom GPT + GPT Actions (requires ChatGPT Plus):
+
+Create a Custom GPT and add an Action pointing at the Supabase Edge Functions — no local
+install, no MCP config, works from both ChatGPT web and desktop. Uses the Supabase anon key
+as Bearer auth.
+
+**Option 3 — Local stdio MCP (legacy fallback)** — requires Python + uv + local repo clone:
 
 ```json
 {
@@ -129,7 +187,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (same f
 }
 ```
 
-For cloud ChatGPT, use the Supabase Edge Functions as GPT Actions. Full guide: `docs/guides/connect-agents.md`
+Full setup for all options: `docs/guides/connect-agents.md`
 
 ---
 

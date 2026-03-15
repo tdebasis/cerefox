@@ -3,46 +3,39 @@
 Cerefox exposes your knowledge base through two access paths. Choose the one that fits your
 client; you can also run both in parallel.
 
-> **Before you begin (Path A — local MCP):** your `.env` file in the root of the Cerefox
-> checkout must contain these three keys or the MCP server will fail to start:
->
-> ```
-> CEREFOX_SUPABASE_URL=https://<your-project-ref>.supabase.co
-> CEREFOX_SUPABASE_KEY=<your-anon-key>
-> OPENAI_API_KEY=<your-openai-api-key>
-> ```
->
-> Copy `.env.example` to `.env` and fill in the values before configuring any client.
- If you're using a **restricted OpenAI API key**, set **Model Capabilities → Write** and
-> leave everything else as None. Do not try to narrow it to sub-scopes (e.g. "Embeddings only")
-> — OpenAI has a [known UI bug](https://community.openai.com/t/missing-scopes-model-request-on-restricted-api-key/1371602)
-> where narrowing sub-scopes after setting the top-level permission corrupts the internal
-> permission state; the key looks correct in the dashboard but returns
-> `Missing scopes: model.request` at runtime. Write on Model Capabilities is already minimal —
-> the key cannot access billing, admin, fine-tuning, or files.
->
-> If you're on Fireworks AI instead of OpenAI, see `docs/guides/configuration.md` →
-> "Changing the embedding model".
->
-> **Still getting a 401 on an existing key?** Open the key in the
+> **OpenAI API key — known glitch (all paths):** The simplest setup is an **unrestricted**
+> OpenAI API key — it just works. If you prefer a restricted key and hit a
+> `Missing scopes: model.request` or 401 error despite the key looking correct in the
+> dashboard, this is a [known OpenAI UI bug](https://community.openai.com/t/missing-scopes-model-request-on-restricted-api-key/1371602):
+> narrowing sub-scopes after setting the top-level **Model Capabilities → Write** permission
+> corrupts the internal permission state silently. The fix is either to switch to an
+> unrestricted key, or to open the key in the
 > [OpenAI dashboard](https://platform.openai.com/api-keys), save it without any changes, and
-> retry — this resets the internal permission state and takes effect immediately.
+> retry — this resets the internal state immediately.
+>
+> This applies to all paths (A-Local, A-Remote, Path B) — any path that calls the OpenAI
+> embedding API can be affected. If you're on Fireworks AI instead, see
+> `docs/guides/configuration.md` → "Changing the embedding model".
 
 ---
 
 ## Access paths at a glance
 
-| Client | Path | Search capability |
-|--------|------|-------------------|
-| Claude Desktop (local) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
-| Cursor (local) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
-| Claude Code (CLI / Desktop Code tab) | Path A — `cerefox mcp` | Hybrid (FTS + semantic), document-level |
-| ChatGPT (chatgpt.com or desktop app) | Path B — Custom GPT → Edge Functions | Hybrid (FTS + semantic), document-level |
-| Cloud Claude (claude.ai web) | Remote Supabase MCP | FTS keyword only (no semantic) |
-| curl / scripts | Path B — Edge Functions directly | Hybrid (FTS + semantic), document-level |
-| Custom Python agents | Python SDK directly | Hybrid (FTS + semantic), document-level |
+| Client | Path | Search | Requirements / caveats |
+|--------|------|--------|-----------------------|
+| Claude Desktop (remote) | Path A-Remote — `cerefox-mcp` Edge Function | Hybrid | Node.js for `npx supergateway`; no Python needed |
+| Claude Code (remote) | Path A-Remote — `cerefox-mcp` Edge Function | Hybrid | URL + anon key only; no local install |
+| Cursor (remote) | Path A-Remote — `cerefox-mcp` Edge Function | Hybrid | URL + anon key only; no local install |
+| ChatGPT (chatgpt.com or desktop) | Path B — Custom GPT → Edge Functions | Hybrid | ChatGPT Plus required |
+| Claude Desktop (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
+| Claude Code (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
+| Cursor (local) | Path A-Local — `cerefox mcp` | Hybrid | Legacy fallback; Python + uv + local clone |
+| Cloud Claude (claude.ai web) | Remote Supabase MCP | FTS only | No install; search quality limited |
+| curl / scripts | Path B — Edge Functions directly | Hybrid | Direct HTTP; no client needed |
+| Custom Python agents | Python SDK directly | Hybrid | Local Python required |
 
-> **"Document-level"** means agents receive complete reconstructed notes, not isolated chunks.
+> **"Hybrid"** = FTS + semantic, document-level (complete reconstructed notes, not isolated chunks).
+> **"FTS only"** = keyword search only; no semantic/vector search.
 
 > **Cloud hybrid for all clients (future)**: deploying the MCP server to Cloud Run would give
 > cloud clients (claude.ai, chatgpt.com) full hybrid search. Tracked in `docs/TODO.md`.
@@ -57,11 +50,17 @@ client; you can also run both in parallel.
 - Supabase project set up and schema deployed (see `setup-supabase.md`)
 - Some content ingested (`cerefox ingest my-notes.md`)
 
-**For Path A (local MCP) only:**
+**For Path A-Local only:**
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed on your machine
 - Cerefox repository cloned locally (e.g. `/Users/yourname/src/cerefox`)
 - `.env` file configured with `CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`,
   and your embedding API key (`OPENAI_API_KEY`)
+
+**For Path A-Remote (remote MCP Edge Function) — recommended:**
+- `cerefox-mcp` Edge Function deployed (`npx supabase functions deploy cerefox-mcp`)
+- Your **anon key**: Supabase Dashboard → Project Settings → API → `anon public`
+- For Claude Desktop: [Node.js](https://nodejs.org) installed (for `npx supergateway`)
+- For Claude Code: no extra dependencies (native HTTP transport)
 
 **For Path B (Edge Functions / GPT Actions) only:**
 - Supabase Edge Functions deployed (`cerefox-search` and `cerefox-ingest`) —
@@ -228,6 +227,135 @@ Create `.mcp.json` in the root of the repo you work in:
 The **Code** tab in Claude Desktop uses the same config as the Claude Code CLI, not
 `claude_desktop_config.json`. Run the `claude mcp add` command above — the Code tab will
 pick it up automatically.
+
+---
+
+## Path A-Remote — Remote MCP Edge Function (`cerefox-mcp`)
+
+### What it is
+
+`cerefox-mcp` is a Supabase Edge Function that speaks the MCP Streamable HTTP protocol
+(spec 2025-03-26). It is a thin adapter over the existing `cerefox-search` and
+`cerefox-ingest` Edge Functions — it handles the JSON-RPC layer and delegates all business
+logic to those functions internally.
+
+A single HTTPS URL gives any remote-capable MCP client the same two tools
+(`cerefox_search` and `cerefox_ingest`) with full hybrid search — no Python, no `uv`, no
+local repository clone needed.
+
+**URL format:**
+```
+https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp
+```
+
+**When to choose Path A-Remote (recommended) vs Path A-Local (legacy fallback):**
+
+| Scenario | Prefer |
+|----------|--------|
+| Default / new setup | Path A-Remote — no Python, no local clone, one URL works everywhere |
+| Multiple machines / cloud dev environments | Path A-Remote |
+| Offline use or development on the cerefox codebase | Path A-Local — no network dependency |
+| Lowest latency (same machine, no HTTPS round-trip) | Path A-Local — slightly faster |
+
+**Deploy the Edge Function** (once, after cloning the repo):
+```bash
+npx supabase functions deploy cerefox-mcp
+```
+
+---
+
+### Path A-Remote: Claude Code
+
+Claude Code supports Streamable HTTP MCP natively — no proxy needed.
+
+```bash
+claude mcp add --transport http cerefox \
+  https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp \
+  --header "Authorization: Bearer <your-anon-key>"
+```
+
+Verify:
+```bash
+claude mcp list
+```
+
+For a user-scoped server (available in all projects), add `--scope user`:
+```bash
+claude mcp add --transport http --scope user cerefox \
+  https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp \
+  --header "Authorization: Bearer <your-anon-key>"
+```
+
+---
+
+### Path A-Remote: Cursor
+
+Cursor supports remote MCP servers natively via `url` + `headers` in `mcp.json`.
+
+1. Open **Cursor Settings** (`Cmd+,`) → **Tools & Integrations** → **MCP** → **Add new global MCP server**
+2. Paste this config (replace the placeholders):
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "url": "https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp",
+      "headers": {
+        "Authorization": "Bearer <your-anon-key>"
+      }
+    }
+  }
+}
+```
+
+3. Save and restart Cursor.
+
+Alternatively, add `.cursor/mcp.json` in your project root with the same content for
+project-scoped access.
+
+---
+
+### Path A-Remote: Claude Desktop
+
+Claude Desktop does not support remote MCP servers natively — it requires a local subprocess
+(`command` field). Use [`supergateway`](https://www.npmjs.com/package/supergateway) as a
+stdio-to-HTTP bridge. It translates between Claude Desktop's stdio transport and the Edge
+Function's Streamable HTTP endpoint.
+
+> **Why supergateway and not `mcp-remote`?** `mcp-remote` 0.1.x proactively discovers OAuth
+> servers at the Supabase root domain and fails when Supabase's built-in auth (GoTrue) rejects
+> dynamic client registration. `supergateway` does not attempt OAuth — it connects directly
+> with the Bearer token. Tested and confirmed working with Supabase Edge Functions.
+
+**Requirements:** [Node.js](https://nodejs.org) installed (for `npx`).
+
+**Config file location:**
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+Add (or merge into) the file:
+
+```json
+{
+  "mcpServers": {
+    "cerefox": {
+      "command": "npx",
+      "args": [
+        "-y", "supergateway",
+        "--streamableHttp", "https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp",
+        "--header", "Authorization: Bearer <your-anon-key>"
+      ]
+    }
+  }
+}
+```
+
+Replace `<your-project-ref>` and `<your-anon-key>` with your actual values.
+
+**Important:**
+- Restart Claude Desktop fully (Cmd+Q on macOS) after saving the config.
+- `-y` tells npx to auto-install `supergateway` without prompting.
+- No Python, no local repo clone, no `.env` file needed — just the URL and anon key.
 
 ---
 

@@ -8,7 +8,7 @@
 
 ## 1. Product Overview
 
-Cerefox is a **cloud-native personal knowledge backend** — it stores, indexes, and serves a single user's knowledge to any AI agent via MCP. It is designed to be:
+Cerefox is a **user-owned knowledge memory layer** — it stores, indexes, and serves curated knowledge to AI agents via MCP, while also accepting agent write-back. It is designed to be:
 
 - **Owned**: all data lives in infrastructure the user controls (Supabase or self-hosted Postgres)
 - **Agent-accessible**: any AI agent (Claude, ChatGPT, Cursor, custom agents, OpenClaw) can search and retrieve from Cerefox via MCP, from anywhere
@@ -17,26 +17,26 @@ Cerefox is a **cloud-native personal knowledge backend** — it stores, indexes,
 
 ### 1.0 What Cerefox Is — and Is Not
 
-**Cerefox is a knowledge indexing and retrieval backend.** It is the layer that makes your personal knowledge searchable by AI agents from anywhere, at any time. Think of it as a cloud API for your second brain.
+**Cerefox is a user-owned knowledge memory layer.** It is the persistent, curated substrate that sits between the user and the AI tools they use — making knowledge searchable and writable by any AI agent, from anywhere, at any time.
+
+The primary use case is **shared memory across AI agents**: knowledge written by one tool (Claude, ChatGPT, Cursor, or a custom agent) becomes immediately available to all others. This prevents context fragmentation and enables continuously evolving, agent-accessible knowledge.
 
 **Cerefox is not a note-taking app.** It has no rich editor, no backlinking UI, no graph view, and no mobile app for capture. Those problems are already solved by excellent tools (Obsidian, Bear, Notion, etc.). Cerefox is designed to work *alongside* them, not replace them.
 
-**The intended workflow:**
+**Knowledge flows:**
 ```
-Write/organize in your preferred tool (e.g. Obsidian)
+Human writes/curates → Cerefox (via CLI, web UI, or file ingest)
+         ↓ and ↑
+AI agents read and write → Cerefox (via MCP or Edge Functions)
          ↓
-Ingest into Cerefox (file upload, folder sync, CLI, or paste)
-         ↓
-Knowledge lives in Supabase — indexed, embedded, searchable
-         ↓
-Any AI agent, anywhere, searches via MCP
+Knowledge lives in Supabase — indexed, embedded, searchable by any agent
 ```
 
 **Cerefox's unique position** in the ecosystem:
-- The only *open source*, *self-hosted*, *MCP-native* knowledge backend
+- The only *open source*, *self-hosted*, *MCP-native* knowledge memory layer
+- Agent-first design: agents read and write as first-class citizens; humans curate and validate
 - Low per-query cost (Supabase free tier + low-cost cloud embedding API)
 - Owner-controlled: no vendor reads your data, no subscription required
-- Agents are first-class citizens on both sides: they can read *and* write
 
 ### 1.1 Content Domains
 
@@ -156,6 +156,18 @@ This makes it easy to filter, audit, or exclude agent-authored content from sear
 | FR-7.3 | `cerefox list-docs` — list documents | P0 |
 | FR-7.4 | `cerefox delete-doc <id>` — delete a document and its chunks | P0 |
 | FR-7.5 | `cerefox projects` — list/manage projects | P1 |
+
+### FR-10: Provenance & Trust
+
+As multiple agents write to the same knowledge base, trust requires clear attribution. Every document and edit must be traceable.
+
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-10.1 | Every document tagged with its author: `source` field distinguishes `human`, `agent`, `file`, `web` | P0 (done) |
+| FR-10.2 | Agent-authored documents include `agent_name` and optional `agent_session_id` in metadata | P1 |
+| FR-10.3 | `created_at` and `updated_at` timestamps on all documents | P0 (done) |
+| FR-10.4 | Version history — ability to see what changed and revert | P2 |
+| FR-10.5 | Review status flag — lightweight indicator of whether a human has validated agent-written content | P2 |
 
 ### FR-8: Backup & Export
 

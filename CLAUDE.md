@@ -117,11 +117,11 @@ cerefox/
 3. **JSONB metadata** on both documents and chunks — evolvable without schema changes
 4. **Greedy section accumulation** — sections (H1/H2/H3) are accumulated into a buffer until adding the next would exceed `max_chunk_chars`; no hard heading-level boundaries
 5. **Cloud-only embeddings** (OpenAI / Fireworks) — local models (mpnet, Ollama) removed; they caused platform-specific failures and added install complexity
-6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`) — embed server-side so agents never need a local embedding model; called directly via HTTPS (not via Supabase MCP)
+6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`, `cerefox-mcp`) — embed server-side so agents never need a local embedding model; `cerefox-mcp` is the recommended MCP endpoint for all Claude/Cursor clients (via Streamable HTTP); Claude Desktop uses `supergateway` as a stdio-to-HTTP bridge; `mcp-remote` does NOT work with Supabase (GoTrue OAuth conflict)
 
 ## Documentation as Source of Truth
 
-Documentation is a **first-class deliverable**, not an afterthought. This is an open source project — the quality of our docs determines whether anyone else can use it. Every phase of implementation includes documentation work.
+Documentation is a **first-class deliverable**, not an afterthought. This is an open source project — the quality of our docs determines whether anyone else can use it. Every iteration includes documentation work.
 
 ### Internal Docs (developer/agent context)
 

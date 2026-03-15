@@ -2,18 +2,20 @@
 
 ## 1. System Overview
 
-Cerefox is a **cloud-native personal knowledge backend** — it stores, indexes, and serves a single user's knowledge to AI agents via MCP. It is *not* a note-taking app; it is the retrieval and access layer that sits behind whichever writing tool the user prefers.
+Cerefox is a **user-owned knowledge memory layer** — a persistent, curated knowledge base that sits between the user and the AI tools they use. It is *not* a note-taking app; it is the shared memory substrate that multiple AI agents can read and write, owned and curated by the user.
+
+The primary use case is **shared memory across AI agents**: knowledge written by one tool becomes immediately available to all others, preventing context fragmentation across sessions and AI tools.
 
 **Layer model:**
 ```
-[Writing layer]   Obsidian, Bear, Notion, plain files, agent write-back
-                        ↓ (ingest: CLI, folder sync, upload, MCP write)
+[Human layer]     Write, curate, and validate knowledge
+                        ↓ (ingest: CLI, folder sync, upload, web UI)
 [Cerefox layer]   Chunking → Embeddings → Supabase (Postgres + pgvector)
-                        ↓ (MCP tools: search, retrieve, write)
-[Agent layer]     Claude, Cursor, ChatGPT, custom agents — anywhere
+                        ↑↓ (MCP tools: search, retrieve, write)
+[Agent layer]     Claude, Cursor, ChatGPT, custom agents — read AND write
 ```
 
-The web UI covers management (browse, metadata, projects) and ingestion (upload, paste). It deliberately has no rich authoring features — that's the writing layer's responsibility.
+The web UI covers management (browse, metadata, projects) and ingestion (upload, paste). It deliberately has no rich authoring features — that's the human/writing layer's responsibility. Agents write directly via MCP tools.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -377,32 +379,46 @@ Rationale:
 
 ## 9. MCP Integration
 
-### 9.1 Architecture: Local vs Cloud Agents
+### 9.1 Architecture: Agent Access Paths
 
-The MCP integration has two layers, serving different client types:
+Cerefox exposes three access paths, serving different client types:
 
 ```
-Desktop clients (Claude Desktop, ChatGPT Desktop, Cursor)
-  └── cerefox mcp (local stdio process)
+Path 1 — Local stdio MCP (cerefox mcp)
+  Desktop clients: Claude Desktop, Cursor, Claude Code
+  └── cerefox mcp (local stdio subprocess)
         └── Python SDK → Supabase DB + OpenAI embeddings
               Full hybrid search, cerefox_search + cerefox_ingest tools
+  Requires: Python + uv + local repo clone
 
-Cloud clients (claude.ai web)
-  └── Remote Supabase MCP (mcp.supabase.com)
-        └── execute_sql → cerefox_fts_search RPC
-              FTS keyword search only (no server-side embedding)
+Path 2 — Remote MCP Edge Function (cerefox-mcp) [RECOMMENDED]
+  Claude Code: native --transport http
+  Cursor: native url + headers in mcp.json
+  Claude Desktop: via supergateway (npx, stdio-to-HTTP bridge)
+  └── cerefox-mcp Supabase Edge Function (MCP Streamable HTTP, spec 2025-03-26)
+        └── Internal fetch → cerefox-search / cerefox-ingest Edge Functions
+              Full hybrid search, same cerefox_search + cerefox_ingest tools
+  Requires: URL + Supabase anon key; Node.js for Claude Desktop (npx supergateway)
+  URL: https://<project>.supabase.co/functions/v1/cerefox-mcp
 
-Cloud ChatGPT (chatgpt.com)
-  └── GPT Actions → cerefox-search Edge Function (HTTP POST)
+Path 3 — GPT Actions / HTTP (cerefox-search + cerefox-ingest)
+  Cloud ChatGPT (chatgpt.com)
+  └── GPT Actions → cerefox-search / cerefox-ingest Edge Functions (HTTP POST)
         └── OpenAI embed + cerefox_search_docs RPC
               Full hybrid search via Edge Functions
 
-Future: deployed remote HTTP MCP server (Cloud Run)
-  └── Any cloud client → full hybrid search
+(Limited) Cloud Claude (claude.ai web)
+  └── Remote Supabase MCP (mcp.supabase.com)
+        └── execute_sql → cerefox_fts_search RPC
+              FTS keyword search only (no server-side embedding)
 ```
 
-**Key constraint**: `cerefox mcp` is a stdio process — it only runs on the local machine.
-Desktop clients launch it as a subprocess. Cloud clients cannot reach it.
+**Key constraint for Path 1**: `cerefox mcp` is a stdio process — it only runs on the local
+machine. Desktop clients launch it as a subprocess. Cloud clients cannot reach it.
+
+**Path 2 vs Path 1 trade-offs**: Path 2 (remote) requires no local install and works from
+any machine with just a URL + anon key. Path 1 (local) is slightly faster (no HTTPS round-
+trip to Supabase) and is preferable if Python + uv are already installed.
 
 ### 9.2 Built-in MCP Server (`cerefox mcp`)
 
@@ -460,11 +476,21 @@ All search RPCs remain available for direct SQL execution via the Supabase MCP
 | `cerefox_context_expand` | Small-to-big: expand chunks with neighbours |
 | `cerefox_save_note` | Store a note (no chunking/embedding — use `cerefox_ingest` for searchable notes) |
 
-### 9.5 Remote HTTP MCP Server (Future)
+### 9.5 Remote MCP Edge Function (`cerefox-mcp`)
 
-Deploying the `cerefox mcp` server to Cloud Run would expose it as a remote MCP endpoint,
-giving cloud clients (claude.ai, any browser-based AI) full hybrid search access. This is
-tracked in `docs/TODO.md`.
+`supabase/functions/cerefox-mcp/index.ts` implements the MCP Streamable HTTP transport
+(spec 2025-03-26) as a Supabase Edge Function. It is a thin protocol adapter:
+
+- Handles MCP JSON-RPC 2.0 methods: `initialize`, `initialized`, `ping`, `tools/list`,
+  `tools/call`
+- For `tools/call`, delegates to `cerefox-search` or `cerefox-ingest` via internal fetch
+- Stateless — no session tracking; each request is independent
+- Auth: Supabase API gateway validates the JWT (anon key); the caller's Authorization
+  header is forwarded to internal Edge Function calls
+
+This replaces the previously planned Cloud Run deployment for remote MCP access. It has
+zero additional hosting cost and requires no new infrastructure — it runs inside the same
+Supabase project as the existing Edge Functions.
 
 ## 10. Deployment Topologies
 

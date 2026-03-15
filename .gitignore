@@ -211,3 +211,6 @@ __marimo__/
 
 # Supabase
 supabase/.temp/
+
+#claude code
+.claude/

@@ -1,7 +1,7 @@
 # Cerefox TODO & Ideas Backlog
 
 > Active work is tracked in `plan.md`. This file captures ideas, future enhancements,
-> and tasks that aren't yet scheduled into a phase.
+> and tasks that aren't yet scheduled into an iteration.
 
 ---
 
@@ -16,9 +16,9 @@
 - [ ] Metadata-filtered search (e.g., search only within a project or tag)
 
 ### Embeddings
-- [x] OpenAI embedder — `CloudEmbedder` (Phase 8, default)
-- [x] Fireworks AI embedder — same class, different base_url/model (Phase 8)
-- [x] Embedding migration tool — `cerefox reindex` re-embeds all chunks in-place (Phase 8)
+- [x] OpenAI embedder — `CloudEmbedder` (Iteration 8, default)
+- [x] Fireworks AI embedder — same class, different base_url/model (Iteration 8)
+- [x] Embedding migration tool — `cerefox reindex` re-embeds all chunks in-place (Iteration 8)
 - [ ] **Edge Function model config via Supabase secrets** — `OPENAI_MODEL` and
   `EMBEDDING_DIMENSIONS` are currently hardcoded as TypeScript constants. Move them to
   Supabase secrets so changing the model only requires updating `.env` + `cerefox reindex`,
@@ -103,20 +103,25 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
   Custom GPT + Edge Functions for all ChatGPT access.
 - [x] **ChatGPT Custom GPT (GPT Actions)** — OpenAPI spec pointing at Edge Functions; Bearer auth
   with Supabase anon key; free with ChatGPT Plus; full hybrid search from cloud ChatGPT.
-- [ ] **Remote HTTP MCP server** (Cloud Run) — deploy `cerefox mcp` to Cloud Run so cloud AI
-  clients (Claude.ai web, chatgpt.com direct) get full hybrid search without Edge Functions.
-  This is the key enabler for universal cloud client access.
-- [ ] **`cerefox-mcp` Edge Function** — implement the MCP JSON-RPC protocol over SSE /
-  Streamable HTTP directly as a Supabase Edge Function. This would expose Cerefox as a
-  URL-addressable MCP server to any MCP-compatible client (ChatGPT dev mode, future remote
-  clients, etc.) without deploying anything beyond Supabase.
-  Research needed before implementing:
-  - MCP transport: SSE (older spec) vs Streamable HTTP (MCP spec 2025-03-26 and later) —
-    determine which ChatGPT dev mode and other target clients actually support
-  - Authentication: MCP spec recommends OAuth 2.0 for remote servers; investigate whether
-    the Supabase anon key as a Bearer token (`Authorization: Bearer <anon-key>`) satisfies
-    MCP clients or whether a proper OAuth flow is required
-  - Supabase Edge Function limits (CPU time, response streaming) against MCP session lifecycle
+- [x] **`cerefox-mcp` Edge Function — universal remote MCP endpoint** (P1)
+  MCP Streamable HTTP transport as a Supabase Edge Function. A single
+  `https://<project>.supabase.co/functions/v1/cerefox-mcp` URL serves all remote-capable
+  clients with no extra hosting cost (Supabase free tier). Thin protocol adapter over
+  `cerefox-search` and `cerefox-ingest`. Auth via Supabase anon key Bearer token.
+
+  **Client compatibility (tested):**
+  | Client | How to connect | Status |
+  |---|---|---|
+  | Claude Desktop | `npx -y supergateway --streamableHttp <url> --header "Authorization: Bearer <anon-key>"` | Confirmed working |
+  | Claude Code | `claude mcp add --transport http cerefox <url> --header "Authorization: Bearer <anon-key>"` | Confirmed working |
+  | Cursor | `url` + `headers.Authorization` in mcp.json | Expected to work (same as Claude Code) |
+  | ChatGPT | Not supported — use Custom GPT + GPT Actions instead | N/A |
+  | Claude.ai web | Not supported — no native Streamable HTTP MCP | N/A |
+
+  **Note**: `mcp-remote` does NOT work with Supabase — it proactively discovers Supabase's
+  GoTrue OAuth server and fails at dynamic client registration. `supergateway` is the correct
+  bridge for Claude Desktop.
+
 - [ ] **OpenClaw** integration — OpenClaw (open-source AI agent) MCP config; same Path A
   approach as Cursor/Claude Code; track once the tool matures.
 - [ ] Usage analytics (which tools agents call most, common query patterns)
@@ -171,3 +176,8 @@ Record important decisions here for future reference.
 | 2026-03-07 | Backup as structured markdown + JSON | Human-readable, versionable, easy to inspect and restore |
 | 2026-03-07 | Cerefox is a knowledge backend, not a writing tool | Authoring is solved by Obsidian/Bear/Notion; Cerefox's value is cloud indexing + MCP agent access |
 | 2026-03-07 | Writing layer tools (Obsidian etc.) are input adapters, not competition | They handle capture/organization; Cerefox handles cloud retrieval — complementary, not competing |
+| 2026-03-14 | Custom GPT + GPT Actions is the recommended ChatGPT path (not remote MCP) | ChatGPT Developer Mode MCP disables Memory and shows high-risk warning; Custom GPT works on Plus with no warnings and memory enabled. The `cerefox-mcp` Edge Function is the universal remote endpoint for Claude Code/Cursor/Desktop, not a ChatGPT fix. |
+| 2026-03-14 | `cerefox-mcp` Edge Function preferred over Cloud Run for remote MCP | Zero additional hosting cost (Supabase free tier), same auth as existing Edge Functions, no new infra. Streamable HTTP transport; static Bearer token (anon key) sufficient for all target clients. |
+| 2026-03-15 | `supergateway` replaces `mcp-remote` for Claude Desktop remote MCP | `mcp-remote` 0.1.x proactively discovers Supabase GoTrue OAuth at the root domain and crashes at dynamic client registration. `supergateway` connects directly via Streamable HTTP without OAuth. |
+| 2026-03-15 | Remove custom auth check from `cerefox-mcp`; forward caller's Authorization header | Supabase API gateway validates JWT; custom `SUPABASE_ANON_KEY` comparison was redundant and broken (env var not reliably available). Internal Edge Function calls now use the forwarded caller token. |
+| 2026-03-15 | Remote MCP (Path A-Remote) is the recommended default; local stdio MCP is legacy fallback | Remote path requires only URL + anon key + npx; no Python, no repo clone. Local path retained for offline use and development. |
