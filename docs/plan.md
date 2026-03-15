@@ -19,7 +19,7 @@
 | 1.6 | Create DB client wrapper (Supabase Python client) | Done | `src/cerefox/db/client.py` — lazy init, typed methods |
 | 1.7 | Write `scripts/db_deploy.py` — apply full schema to a fresh instance | Done | psycopg2, `--dry-run`, `--reset` flags |
 | 1.8 | Write `scripts/db_status.py` — verify schema and report table stats | Done | Checks extensions, tables, functions, indexes, row counts |
-| 1.9 | Deploy schema to Supabase using db_deploy.py | Pending | Requires real credentials — user action needed |
+| 1.9 | Deploy schema to Supabase using db_deploy.py | Done | Schema deployed to live Supabase instance |
 | 1.10 | Write tests for config module and DB client (unit, mocked) | Done | 40 tests pass — `tests/test_config.py`, `tests/test_db_client.py` |
 | 1.11 | Write `docs/guides/setup-supabase.md` and `docs/guides/configuration.md` | Done | Step-by-step setup guide + full config reference |
 
@@ -58,7 +58,7 @@
 | 3.5 | Add file system backup | Done | `src/cerefox/backup/fs_backup.py` — atomic JSON writes |
 | 3.6 | Write `scripts/backup_create.py` and `scripts/backup_restore.py` | Done | Idempotent restore; --dry-run flag on both |
 | 3.7 | Write tests for pipeline: dedup logic, chunk-to-DB mapping (mocked DB) | Done | `tests/ingestion/test_pipeline.py`, `test_backup.py`, `test_cli.py` |
-| 3.8 | Integration test: ingest a real MD file into Supabase | Pending | `@pytest.mark.integration` — requires live Supabase |
+| 3.8 | Integration test: ingest a real MD file into Supabase | Done | Verified manually against live Supabase |
 
 **Deliverable**: `cerefox ingest my-notes.md --project "creative projects"` works end-to-end. Backup scripts documented.
 
@@ -70,13 +70,13 @@
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 4.1 | Deploy search RPCs to Supabase | Pending | Requires real credentials — user action needed |
+| 4.1 | Deploy search RPCs to Supabase | Done | Deployed via db_deploy.py |
 | 4.2 | Implement Python search client (wraps RPC calls) | Done | `src/cerefox/retrieval/search.py` — SearchClient, SearchResult, SearchResponse |
 | 4.3 | Add CLI search command | Done | `cerefox search` — hybrid/fts/semantic modes, --alpha, --count, --project |
 | 4.4 | Implement response size management (truncation, metadata) | Done | `_build_response()` + `_estimate_bytes()`; configurable via `CEREFOX_MAX_RESPONSE_BYTES` |
 | 4.5 | Write tests for search client: response assembly, size truncation, metadata | Done | 22 tests in `tests/retrieval/test_search.py` (164 total passing) |
-| 4.6 | Integration test: search with real ingested content | Pending | `@pytest.mark.integration` — requires live Supabase |
-| 4.7 | Connect via Supabase MCP and verify agent access | Pending | Requires live Supabase — user action needed |
+| 4.6 | Integration test: search with real ingested content | Done | Verified manually against live Supabase |
+| 4.7 | Connect via Supabase MCP and verify agent access | Done | Verified via Claude Desktop + Claude Code |
 | 4.8 | Implement `cerefox_save_note` RPC (agent write tool) | Done | `src/cerefox/db/rpcs.sql` + `client.save_note()` — quick note capture, no chunking |
 | 4.9 | Write `docs/guides/connect-agents.md` (Claude, Cursor, generic MCP client) | Done | Claude Desktop, Cursor IDE, Python SDK, full RPC reference |
 
