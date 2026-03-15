@@ -24,7 +24,7 @@
       <a href="/document/{{ hit.document_id }}" style="font-weight:600;">{{ hit.doc_title }}</a>
       {% for pid in hit.doc_project_ids %}{% if pid in projects_map %}<span class="proj-pill">{{ projects_map[pid] }}</span>{% endif %}{% endfor %}
       <span style="color:var(--pico-muted-color);font-size:0.8rem;margin-left:0.75rem;">
-        {{ hit.chunk_count }} chunks · {{ hit.total_chars }} chars{% if hit.doc_updated_at %} · updated {{ hit.doc_updated_at[:10] }}{% endif %}
+        {{ hit.chunk_count }} chunks · {{ hit.total_chars }} chars{% if hit.doc_updated_at %} · updated <time datetime="{{ hit.doc_updated_at }}">{{ hit.doc_updated_at[:10] }}</time>{% endif %}
       </span>
     </div>
     <p class="result-content">{{ hit.full_content[:600] }}{% if hit.full_content|length > 600 %}…{% endif %}</p>

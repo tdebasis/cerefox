@@ -2,7 +2,7 @@
 <div class="flash-info" style="margin-top:0.5rem;padding:0.6rem 0.9rem;">
   <strong>⚠ Existing document found:</strong>
   "<a href="/document/{{ existing_doc.id }}">{{ existing_doc.title }}</a>"
-  (updated {{ existing_doc.updated_at[:10] if existing_doc.updated_at else existing_doc.created_at[:10] if existing_doc.created_at else "unknown" }})
+  (updated {% if existing_doc.updated_at %}<time datetime="{{ existing_doc.updated_at }}">{{ existing_doc.updated_at[:10] }}</time>{% elif existing_doc.created_at %}<time datetime="{{ existing_doc.created_at }}">{{ existing_doc.created_at[:10] }}</time>{% else %}unknown{% endif %})
   <br>
   <label style="margin-top:0.4rem;display:inline-flex;align-items:center;gap:0.4rem;font-size:0.9rem;font-weight:normal;">
     <input type="checkbox" name="update_existing" value="1" style="margin:0;">

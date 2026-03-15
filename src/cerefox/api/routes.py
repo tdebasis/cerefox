@@ -297,9 +297,14 @@ def document_view(
             if project_ids:
                 all_projects = {p["id"]: p for p in client.list_projects()}
                 doc_projects = [all_projects[pid] for pid in project_ids if pid in all_projects]
+            # Fetch created_at/updated_at from the documents table (reconstruct_doc
+            # RPC doesn't return them).
+            doc_record = client.get_document_by_id(document_id)
             ctx.update({
                 "doc": doc_row,
                 "doc_projects": doc_projects,
+                "doc_created_at": doc_record.get("created_at") if doc_record else None,
+                "doc_updated_at": doc_record.get("updated_at") if doc_record else None,
                 "error": None,
             })
     except Exception as exc:

@@ -43,7 +43,7 @@
           <td><code>{{ doc.source }}</code></td>
           <td>{{ doc.chunk_count }}</td>
           <td>{{ "{:,}".format(doc.total_chars) }} chars</td>
-          <td>{{ doc.updated_at[:10] if doc.updated_at else (doc.created_at[:10] if doc.created_at else "—") }}</td>
+          <td>{% if doc.updated_at %}<time datetime="{{ doc.updated_at }}">{{ doc.updated_at[:10] }}</time>{% elif doc.created_at %}<time datetime="{{ doc.created_at }}">{{ doc.created_at[:10] }}</time>{% else %}—{% endif %}</td>
           <td style="white-space:nowrap;">
             {{ action_button("Edit", href="/document/" ~ doc.id ~ "/edit", variant="secondary", size="sm") }}
             {# Upload button: label wraps hidden file input; selecting a file auto-submits via HTMX #}

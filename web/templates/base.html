@@ -105,6 +105,27 @@
       if (evt.target.closest('[data-loading-modal]')) modal.showModal();
     });
   }());
+  // Convert <time> elements with ISO-8601 datetime to local time.
+  // Works on initial load and after HTMX partial swaps.
+  function localizeTimeElements(root) {
+    (root || document).querySelectorAll('time[datetime]').forEach(function (el) {
+      if (el.dataset.localized) return;
+      var dt = new Date(el.getAttribute('datetime'));
+      if (isNaN(dt)) return;
+      var fmt = el.dataset.format || 'date';  // 'date' or 'datetime'
+      if (fmt === 'datetime') {
+        el.textContent = dt.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'})
+          + ' ' + dt.toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit'});
+      } else {
+        el.textContent = dt.toLocaleDateString(undefined, {year:'numeric',month:'short',day:'numeric'});
+      }
+      el.dataset.localized = '1';
+    });
+  }
+  localizeTimeElements();
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    localizeTimeElements(evt.detail.target);
+  });
   </script>
 </body>
 </html>
