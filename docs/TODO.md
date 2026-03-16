@@ -151,11 +151,6 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - Knowledge graph overlay on top of chunk/document storage
 - Spaced repetition integration (surface forgotten but important notes)
 
-### Teliboria-Specific
-- World-building structured data (characters, locations, timelines)
-- Cross-reference checks (consistency validation across world-building docs)
-- Publication workflow integration
-
 ### UX
 - Browser extension for quick capture (clip a paragraph → ingest)
 - Mobile app for quick note capture
