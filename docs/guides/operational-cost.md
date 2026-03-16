@@ -107,7 +107,7 @@ If you want to keep costs as low as possible:
 
 ## What is always free
 
-- The Cerefox application itself (MIT open source, no license fees)
+- The Cerefox application itself (Apache 2.0 open source, no license fees)
 - Local CLI and web UI (runs on your machine)
 - All search RPCs and FTS queries (Supabase free tier covers personal-scale usage)
 - Backups and restores (JSON snapshots, no cloud storage required)

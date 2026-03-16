@@ -4,7 +4,7 @@
 
 Cerefox is a personal "second brain" knowledge base. It stores markdown notes, thoughts, and ideas in Supabase (Postgres + pgvector), supports hybrid search (FTS + semantic), and exposes everything via MCP so any AI agent can query it.
 
-Single-user, open-source (MIT), designed to be cheap/free to operate.
+Single-user, open-source (Apache 2.0), designed to be cheap/free to operate.
 
 ## Tech Stack
 

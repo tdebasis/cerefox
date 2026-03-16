@@ -135,7 +135,7 @@
 | 7.5 | `docs/guides/quickstart.md` — zero to first document in < 15 min | Done | 8-step guide from clone to first search + agent connection |
 | 7.6 | `docs/guides/setup-cloud-run.md` — GCP Cloud Run deployment | Done | Full deploy guide with cost estimate and access control options |
 | 7.7 | `docs/guides/contributing.md` — adding embedders, converters, commands | Done | Extension points for all major components |
-| 7.8 | License file, .env.example | Done | MIT license (pre-existing) + .env.example with all settings |
+| 7.8 | License file, .env.example | Done | Apache 2.0 license + .env.example with all settings |
 | 7.9 | First release (v0.1.0) | Ready | 218 tests passing, all iterations complete — tag when credentials available |
 
 **Deliverable**: Open source release. All setup guides complete. Any new user can go from zero to running Cerefox in one sitting.

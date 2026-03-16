@@ -6,7 +6,7 @@
 
 **User-owned shared memory for AI agents** — a persistent, curated knowledge layer that multiple AI tools can read and write, backed by Postgres + pgvector.
 
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
 
 ---
@@ -209,4 +209,4 @@ Full setup for all options: `docs/guides/connect-agents.md`
 
 ## License
 
-MIT — see LICENSE.
+Apache 2.0 — see LICENSE.
