@@ -181,6 +181,7 @@ Kept accurate and current at all times:
 | `docs/solution-design.md` | Architecture | A design decision is made or revised |
 | `docs/plan.md` | Progress | A task starts, completes, or is re-scoped |
 | `docs/TODO.md` | Backlog | A new idea or future task surfaces |
+| `docs/e2e-use-cases.md` | Testing | An e2e test is added, removed, or changes status |
 | `CLAUDE.md` | Conventions | Project conventions or structure changes |
 
 **Rule**: when implementing a feature, update the relevant docs in the same commit/session. Another developer or AI agent should be able to read these files at any point and have an accurate picture of what is built, what is planned, and why.
@@ -214,6 +215,7 @@ These live in `docs/guides/` and are written for someone who has never seen the 
 | `connect-agents.md` | MCP setup for Claude, Cursor, and generic clients |
 | `configuration.md` | All `CEREFOX_` environment variables with defaults |
 | `ops-scripts.md` | All `scripts/` — deploy, migrate, backup, restore |
+| `operational-cost.md` | Embedding and hosting cost estimates |
 | `contributing.md` | How to add embedders, converters, CLI commands |
 
 **Rule**: a setup guide must be written before (or alongside) the feature it documents — not after the fact.
