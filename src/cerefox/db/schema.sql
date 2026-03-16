@@ -71,9 +71,7 @@ CREATE TABLE IF NOT EXISTS cerefox_chunks (
     embedding_upgrade  VECTOR(768),
 
     -- Track which model produced each embedding
-    -- Note: DDL default is 'all-mpnet-base-v2' for historical reasons; new chunks
-    -- use the embedder name from config (e.g. 'text-embedding-3-small').
-    embedder_primary   TEXT        NOT NULL DEFAULT 'all-mpnet-base-v2',
+    embedder_primary   TEXT        NOT NULL DEFAULT 'text-embedding-3-small',
     embedder_upgrade   TEXT,
 
     -- Full-text search vector (generated, always kept in sync)
