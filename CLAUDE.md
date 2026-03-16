@@ -185,6 +185,22 @@ Kept accurate and current at all times:
 
 **Rule**: when implementing a feature, update the relevant docs in the same commit/session. Another developer or AI agent should be able to read these files at any point and have an accurate picture of what is built, what is planned, and why.
 
+### Cerefox Decision Log (lives in Cerefox, NOT in the repo)
+
+The **"Cerefox Decision Log"** document is stored in the Cerefox knowledge base (project: `cerefox`), not in the git repo. It contains operational details, lessons learned, and experiment outcomes that are useful as memory during future development that will not pollute the OSS project.
+
+**Update it every session** by calling `cerefox_ingest` with `update_if_exists: true`:
+- Add new architectural or process decisions (with date, context, options, decision, outcome)
+- Add new experiments, failures, or platform gotchas to the "Lessons Learned" section
+- Search for it first with `cerefox_search` query `"Cerefox Decision Log"` to review current content
+
+**When to add an entry**:
+- A significant technical decision is made or revised
+- A platform behavior surprises us (MCP client compatibility, Supabase gotchas, etc.)
+- An experiment fails and we learn something worth remembering
+- A workaround is discovered for a third-party bug
+- This file will grow quickly, so this is a good example/use case for the envisioned context bundles concept. It is a living decision log that grows, gets split by time period, and spawns derivative documents (summaries, "top lessons" digests, quarterly retrospectives). Practical plan for when it outgrows a single document: (a) Split by quarter: Cerefox Decision Log — 2026 Q1, ...Q2, etc. Each is a standalone document in Cerefox, same project and metadata tags, (b) Rolling summary: a separate "Cerefox Decision Log — Current Summary" that's a compressed digest of all active decisions and top lessons. Agents load this instead of the full history, (c) The full log stays searchable: even split across documents, cerefox_search finds the right entry by content
+
 ### User-Facing Docs (setup guides, how-tos)
 
 These live in `docs/guides/` and are written for someone who has never seen the codebase:
