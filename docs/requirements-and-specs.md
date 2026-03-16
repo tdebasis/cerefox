@@ -13,7 +13,7 @@ Cerefox is a **user-owned knowledge memory layer** — it stores, indexes, and s
 - **Owned**: all data lives in infrastructure the user controls (Supabase or self-hosted Postgres)
 - **Agent-accessible**: any AI agent (Claude, ChatGPT, Cursor, custom agents, OpenClaw) can search and retrieve from Cerefox via MCP, from anywhere
 - **Cheap**: operates on Supabase free tier with low ongoing cost (cloud embeddings are the only variable expense)
-- **Open source**: MIT license, designed for personal use but shareable
+- **Open source**: Apache 2.0 license, designed for personal use but shareable
 
 ### 1.0 What Cerefox Is — and Is Not
 
@@ -314,7 +314,7 @@ Cerefox is an open source project. Documentation is treated as a first-class del
 | Testing | pytest |
 | Linting | ruff |
 | Containerization | Docker |
-| License | MIT |
+| License | Apache 2.0 |
 
 ---
 

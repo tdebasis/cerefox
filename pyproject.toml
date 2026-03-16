@@ -7,7 +7,7 @@ name = "cerefox"
 version = "0.1.0"
 description = "Personal second brain: cloud knowledge backend with MCP access for AI agents"
 readme = "README.md"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
     "supabase>=2.0.0",
