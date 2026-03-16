@@ -63,7 +63,7 @@ client; you can also run both in parallel.
 - For Claude Code: no extra dependencies (native HTTP transport)
 
 **For Path B (Edge Functions / GPT Actions) only:**
-- Supabase Edge Functions deployed (`cerefox-search` and `cerefox-ingest`) —
+- Supabase Edge Functions deployed (`cerefox-search`, `cerefox-ingest`, and `cerefox-metadata`) —
   see `setup-supabase.md` → Step 8 for the deploy procedure (`npx supabase functions deploy`)
 - Your **anon key**: Supabase Dashboard → Project Settings → API → `anon public`
 - Your **project ref**: visible in the Supabase Dashboard URL
@@ -343,7 +343,7 @@ Add (or merge into) the file:
       "args": [
         "-y", "supergateway",
         "--streamableHttp", "https://<your-project-ref>.supabase.co/functions/v1/cerefox-mcp",
-        "--header", "Authorization: Bearer <your-anon-key>"
+        "--oauth2Bearer", "<your-anon-key>"
       ]
     }
   }
@@ -427,7 +427,7 @@ In the action editor, paste this schema (replace `<your-project-ref>`):
 openapi: 3.1.0
 info:
   title: Cerefox Knowledge Base
-  version: 1.0.1
+  version: 1.1.0
 servers:
   - url: https://<your-project-ref>.supabase.co/functions/v1
 paths:
@@ -489,6 +489,20 @@ paths:
       responses:
         '200':
           description: Ingest result
+  /cerefox-metadata:
+    post:
+      operationId: listMetadataKeys
+      summary: List all metadata keys in use across documents with counts and example values
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        '200':
+          description: Array of metadata keys with doc_count and example_values
 ```
 
 **Step 3 — Configure authentication**
@@ -497,6 +511,10 @@ In the action's **Authentication** settings:
 - Type: **API Key**
 - Auth type: **Bearer**
 - API key: your Supabase **anon key**
+
+> **Important:** ChatGPT may reset the API key when you update the action schema.
+> If you get a 403 error after changing the schema, re-enter the anon key in the
+> authentication settings — the functions themselves are fine.
 
 **Step 4 — Save and test**
 
@@ -784,23 +802,17 @@ Returns: `id`, `title`, `created_at`
 
 ### Metadata RPCs
 
-#### `cerefox_upsert_metadata_key`
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `p_key` | TEXT | Key name (snake_case) |
-| `p_label` | TEXT | Human-readable label (optional) |
-| `p_description` | TEXT | Description (optional) |
-
-#### `cerefox_delete_metadata_key`
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `p_key` | TEXT | Key to remove |
-
 #### `cerefox_list_metadata_keys`
 
-No parameters. Returns: `key`, `label`, `description`, `created_at`, `updated_at`.
+No parameters. Returns all distinct metadata keys currently in use across documents.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `key` | TEXT | Metadata key name |
+| `doc_count` | BIGINT | Number of documents using this key |
+| `example_values` | TEXT[] | Up to 5 sample values |
+
+This RPC derives keys from actual `doc_metadata` JSONB — no separate registry table.
 
 ---
 
