@@ -99,11 +99,22 @@ cerefox/
 
 ### Testing
 - **Write tests alongside code, not after** — every module added to `src/cerefox/` gets a corresponding test module in `tests/`
-- Run tests: `uv run pytest`
 - Tests go in `tests/` mirroring `src/cerefox/` structure (e.g., `tests/chunking/test_markdown.py`)
 - Use fixtures for DB client mocking — never hit a real database in unit tests
-- Integration tests that need Supabase are marked `@pytest.mark.integration` and skipped by default
 - Test at least: happy path, edge cases (empty input, max size, malformed input), error conditions
+
+**Test suites and how to run them:**
+
+| Suite | Command | What it does |
+|-------|---------|-------------|
+| Unit tests | `uv run pytest` | Fast, mocked, no network (default) |
+| API e2e | `uv run pytest -m e2e` | Hits live Supabase (REST API + Edge Functions) |
+| UI e2e | `uv run pytest -m ui` | Playwright browser tests against local web app |
+| All e2e | `uv run pytest -m "e2e or ui"` | Both API and UI e2e |
+
+- **API e2e** (`tests/e2e/test_api_e2e.py`): Uses credentials from `.env`. Edge Function tests need `CEREFOX_SUPABASE_ANON_KEY` (JWT). Cleans up `[E2E]`-prefixed test data automatically.
+- **UI e2e** (`tests/e2e/test_ui_e2e.py`): Requires web app running at `http://127.0.0.1:8000/`. Uses Playwright + Chromium. Install browsers: `uv run playwright install chromium`.
+- See `docs/e2e-use-cases.md` for the full use-case matrix and TODO list.
 
 ### Git (Lightweight GitHub Flow)
 
