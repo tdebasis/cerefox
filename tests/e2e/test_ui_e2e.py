@@ -19,6 +19,8 @@ import uuid
 import pytest
 from playwright.sync_api import Page, expect
 
+from cerefox.db.client import CerefoxClient
+
 pytestmark = pytest.mark.ui
 
 BASE_URL = "http://127.0.0.1:8000"
@@ -44,7 +46,7 @@ class TestDashboard:
 
 
 class TestIngestPaste:
-    def test_paste_ingest_creates_document(self, page: Page):
+    def test_paste_ingest_creates_document(self, page: Page, e2e_client: CerefoxClient):
         """Full ingest flow: paste content → verify it appears in search."""
         title = _unique_title("Playwright Test Doc")
 
@@ -79,20 +81,12 @@ class TestIngestPaste:
         # Verify it appears in results
         expect(page.locator(f"text={title}")).to_be_visible(timeout=10000)
 
-        # Clean up: navigate to the document and delete via the delete form
-        page.locator(f"text={title}").first.click()
-        page.wait_for_timeout(1000)
-
-        # Extract document ID from the URL and POST the delete form directly
-        doc_url = page.url
-        doc_id_match = re.search(r"/document/([a-f0-9-]+)", doc_url)
-        if doc_id_match:
-            page.on("dialog", lambda dialog: dialog.accept())
-            # Use the specific delete form for this document
-            delete_form = page.locator(f'form[action="/document/{doc_id_match.group(1)}/delete"]')
-            if delete_form.count() > 0:
-                delete_form.locator("button").click()
-                page.wait_for_timeout(1000)
+        # Clean up via REST API — more reliable than UI navigation
+        docs = e2e_client.list_documents(limit=50)
+        for doc in docs:
+            if doc.get("title") == title:
+                e2e_client.delete_document(doc["id"])
+                break
 
 
 # ── Search ─────────────────────────────────────────────────────────────────
