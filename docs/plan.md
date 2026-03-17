@@ -272,7 +272,7 @@ single `--transport http` command. Claude Desktop connects via `supergateway` pr
 
 ---
 
-## Iteration 11: Metadata Overhaul — Dynamic Tags & Settings Cleanup
+## Iteration 11: Metadata Overhaul — Dynamic Tags & Settings Cleanup ✓
 
 **Goal**: Replace the rigid `cerefox_metadata_keys` registry with a dynamic, data-driven
 approach. Make metadata editing flexible (arbitrary key-value pairs), provide agents with
@@ -373,22 +373,111 @@ Exposed in both the local MCP server (`mcp_server.py`) and the remote Edge Funct
 | 11.14 | Update `_extract_ingest_form()` for dynamic key-value pairs | Done | Paired `meta_key[]`/`meta_value[]` arrays replace `meta__<key>` pattern |
 | 11.15 | Update tests — remove registry tests, add dynamic key tests | Done | 408 tests passing; new tests for MCP tool + form metadata |
 | 11.16 | Update docs — plan.md, solution-design.md | Done | Mark tasks done; update architecture docs |
-| 11.17 | Investigate Supabase OAuth 2.1 for MCP authentication | Pending | Enable GoTrue OAuth server for spec-compliant MCP client auth; would unblock Perplexity web and any future client that does OAuth discovery |
-| 11.18 | Test Perplexity connectivity — web (OAuth) + desktop (local stdio) | Pending | Web: depends on 11.17 (OAuth); Desktop: install Perplexity Helper App, connect to `cerefox mcp` via stdio; document results in connect-agents.md |
-| 11.19 | Set up Supabase local dev environment (`supabase start`) | Pending | Full local stack (Postgres+pgvector, Edge Functions runtime, GoTrue); configure `supabase/config.toml`; verify schema deploys and Edge Functions serve locally |
-| 11.20 | Test Edge Functions locally (`supabase functions serve`) | Pending | Verify cerefox-search, cerefox-ingest, cerefox-mcp work against local Postgres |
+| 11.17 | Investigate Supabase OAuth 2.1 for MCP authentication | Researched — Deferred | GoTrue owns `/.well-known` on `*.supabase.co`; Supabase BYO MCP auth "coming soon" (no timeline); no current client requires OAuth. See `docs/research/oauth-mcp-auth.md`. Revisit when Supabase ships BYO MCP auth or a must-have client requires OAuth. |
+| 11.18 | Investigate Perplexity integration paths | Researched — Deferred | Web connector tested and failed (GoTrue conflict). Decision: test Desktop + Helper App + local `cerefox mcp` when convenient. Sonar/Agent API are programmatic alternatives. See `docs/research/oauth-mcp-auth.md` Section 8. |
+| 11.19 | Investigate Gemini integration | Researched — To test | Gemini CLI supports Streamable HTTP + static Bearer headers natively. Should work like Claude Code/Cursor. See `docs/research/gemini-integration.md`. |
 
 **Deliverable**: Metadata is fully open-ended JSONB. Agents can discover existing keys via
 MCP tool. Web UI allows editing any key-value pair. No manual registry to maintain. Settings
-page removed (or repurposed if other settings are added later). Perplexity connectivity
-investigated and documented. Local Supabase dev environment operational for Edge Function
-development and testing.
+page removed (or repurposed if other settings are added later). Agent integration research
+(OAuth, Perplexity, Gemini) documented.
+
+---
+
+## Iteration 12: Small-to-Big Retrieval, Document Versioning & Full Retrieval
+
+Three related features that work together: (1) smart chunk-level retrieval for large
+documents, (2) implicit versioning to prevent data loss on updates, (3) a full document
+retrieval API for when you need the complete text.
+
+See `docs/requirements-and-specs.md` FR-4.10–4.14 and FR-11 for detailed specifications.
+
+### 12A: Small-to-Big Retrieval
+
+For large documents, search returns matched chunks + N neighbor chunks instead of the full
+document. Below a configurable threshold, current full-document behaviour is retained.
+
+**Config parameters**:
+- `CEREFOX_SMALL_TO_BIG_THRESHOLD` — doc size in chars above which chunk-level retrieval
+  kicks in (default: 40000)
+- `CEREFOX_CONTEXT_WINDOW` — neighbor chunks on each side of each match (default: 1)
+
+**Assembly rule**: matched chunks + N preceding + N following, sorted by chunk_index,
+deduplicated. Example: matched = c1, c3; N=1 → c0, c1, c2, c3, c4 (not c0, c1, c2,
+c2, c3, c4).
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` config params | Pending | Add to `config.py` with defaults 40000 and 1 |
+| 12.2 | Implement `cerefox_expand_context` RPC | Pending | Takes chunk IDs + window size, returns ordered sibling chunks with dedup; callable from Python and Edge Functions |
+| 12.3 | Update `search.py` — apply small-to-big logic post-search | Pending | If doc size > threshold, call expand_context instead of full-doc reconstruction; assemble deduped result |
+| 12.4 | Update `cerefox-search` Edge Function | Pending | Apply threshold logic server-side |
+| 12.5 | Update `cerefox-mcp` Edge Function | Pending | Pass through to cerefox-search |
+| 12.6 | Write tests — threshold boundary, dedup, ordering, N=0/1/2 | Pending | Unit tests for RPC logic + integration tests for full search path |
+
+### 12B: Implicit Document Versioning
+
+Every `update_if_exists` preserves the previous content as a version. Lazy retention policy:
+always keep at least 1 previous version; keep all versions within `CEREFOX_VERSION_RETENTION_HOURS`
+(default: 48h); lazily delete expired versions on next update.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.7 | Design `cerefox_document_versions` table | Pending | Stores full content snapshot, metadata snapshot, timestamp, source. No chunks/embeddings. Cascade delete from parent document. |
+| 12.8 | Add `CEREFOX_VERSION_RETENTION_HOURS` config param | Pending | Default 48 hours |
+| 12.9 | Update ingestion pipeline — create version on update | Pending | Before overwriting, snapshot current content to versions table |
+| 12.10 | Implement lazy version cleanup | Pending | On each update: delete versions older than retention window, except always keep the most recent one |
+| 12.11 | Deploy schema migration | Pending | New table + RPC for version listing |
+| 12.12 | Write tests — version creation, retention, lazy cleanup | Pending | Test: single update keeps 1 version, rapid updates keep all within window, cleanup after window |
+
+### 12C: Full Document Retrieval API
+
+A dedicated API primitive that returns the complete text of a specific document by ID,
+optionally for a specific version. Serves as the complement to small-to-big search: search
+finds the relevant chunks, this API retrieves the full document when needed.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.13 | Implement `cerefox_get_document` RPC | Pending | Returns full content + metadata by document ID. Optionally accepts version_id for historical versions. |
+| 12.14 | Implement `cerefox_list_versions` RPC | Pending | Returns version list for a document: version_id, timestamp, size_chars, source |
+| 12.15 | Add REST API endpoint for full document retrieval | Pending | `GET /api/document/{id}?version={version_id}` |
+| 12.16 | Add MCP tool for full document retrieval | Pending | Expose via local MCP server and cerefox-mcp Edge Function |
+| 12.17 | Add CLI command `cerefox get-doc <id>` | Pending | Print full document text; `--version` flag for historical |
+| 12.18 | Write tests for full retrieval + version retrieval | Pending | Happy path, nonexistent ID, nonexistent version |
+
+### 12D: Documentation
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.19 | Update requirements-and-specs.md | Done | FR-4.10–4.14 and FR-11 added |
+| 12.20 | Update solution-design.md | Pending | Document versioning table design, retrieval flow changes |
+| 12.21 | Update plan.md and CLAUDE.md | Pending | Mark completion, update conventions |
+
+**Deliverable**: Large documents return focused context via search. All documents have
+implicit version history with lazy retention. Full document text (current or historical)
+is retrievable via dedicated API, MCP tool, and CLI.
+
+---
+
+## Iteration 13: Local Supabase Dev Environment
+
+Set up a full local Supabase stack for offline development and Edge Function testing.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.1 | Set up Supabase local dev environment (`supabase start`) | Pending | Full local stack (Postgres+pgvector, Edge Functions runtime, GoTrue); configure `supabase/config.toml`; verify schema deploys and Edge Functions serve locally |
+| 13.2 | Test Edge Functions locally (`supabase functions serve`) | Pending | Verify cerefox-search, cerefox-ingest, cerefox-mcp work against local Postgres |
+
+**Deliverable**: Local Supabase dev environment operational for Edge Function development
+and testing without requiring the remote Supabase instance.
 
 ---
 
 ## Current Focus
 
-**Iteration 11 in progress.** Metadata overhaul (11.1–11.16) **complete** — registry table
-dropped, dynamic key discovery via RPC, dynamic key-value editors in web UI, MCP tool in both
-local and remote servers. Remaining: Supabase OAuth 2.1 investigation (11.17), Perplexity
-connectivity testing (11.18), and local Supabase dev environment (11.19–11.20).
+**Iteration 11 complete.** Metadata overhaul (11.1–11.16) done. OAuth (11.17), Perplexity
+(11.18), and Gemini (11.19) researched — research docs in `docs/research/`. Gemini testing
+deferred to a future session.
+
+**Iteration 12 next**: True small-to-big retrieval — chunk-level results with N neighbor
+chunks for large documents, deduped and assembled in order.

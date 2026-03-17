@@ -181,9 +181,36 @@ Kept accurate and current at all times:
 | `docs/solution-design.md` | Architecture | A design decision is made or revised |
 | `docs/plan.md` | Progress | A task starts, completes, or is re-scoped |
 | `docs/TODO.md` | Backlog | A new idea or future task surfaces |
+| `docs/e2e-use-cases.md` | Testing | An e2e test is added, removed, or changes status |
 | `CLAUDE.md` | Conventions | Project conventions or structure changes |
 
 **Rule**: when implementing a feature, update the relevant docs in the same commit/session. Another developer or AI agent should be able to read these files at any point and have an accurate picture of what is built, what is planned, and why.
+
+### Cerefox Decision Log (lives in Cerefox, NOT in the repo)
+
+The **"Cerefox Decision Log"** document is stored in the Cerefox knowledge base (project: `cerefox`), not in the git repo. It contains operational details, lessons learned, and experiment outcomes that are useful as memory during future development that will not pollute the OSS project.
+
+**Update it every session** by calling `cerefox_ingest` with `update_if_exists: true`:
+- Add new architectural or process decisions (with date, context, options, decision, outcome)
+- Add new experiments, failures, or platform gotchas to the "Lessons Learned" section
+- Search for it first with `cerefox_search` query `"Cerefox Decision Log"` to review current content
+
+**When to add an entry**:
+- A significant technical decision is made or revised
+- A platform behavior surprises us (MCP client compatibility, Supabase gotchas, etc.)
+- An experiment fails and we learn something worth remembering
+- A workaround is discovered for a third-party bug
+- **NEVER compress or summarize** existing entries when updating — always add new entries
+  and keep existing ones verbatim. Accidental compression causes data loss.
+- **Splitting policy**: when the document exceeds ~50,000 characters, create a new document
+  that continues the log (e.g., "Cerefox Decision Log — 2026 Q2"). Each part is a standalone
+  document in Cerefox with the same project and metadata tags. Do NOT try to split at an
+  exact boundary — finish the current entry, then start a new document for subsequent entries.
+- **Rolling summary** (future): a separate "Cerefox Decision Log — Current Summary" that's
+  a compressed digest of all active decisions and top lessons. Agents load this instead of
+  the full history.
+- The full log stays searchable even when split: `cerefox_search` finds entries by content
+  across all documents.
 
 ### User-Facing Docs (setup guides, how-tos)
 
@@ -198,6 +225,7 @@ These live in `docs/guides/` and are written for someone who has never seen the 
 | `connect-agents.md` | MCP setup for Claude, Cursor, and generic clients |
 | `configuration.md` | All `CEREFOX_` environment variables with defaults |
 | `ops-scripts.md` | All `scripts/` — deploy, migrate, backup, restore |
+| `operational-cost.md` | Embedding and hosting cost estimates |
 | `contributing.md` | How to add embedders, converters, CLI commands |
 
 **Rule**: a setup guide must be written before (or alongside) the feature it documents — not after the fact.
