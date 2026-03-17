@@ -272,7 +272,7 @@ single `--transport http` command. Claude Desktop connects via `supergateway` pr
 
 ---
 
-## Iteration 11: Metadata Overhaul — Dynamic Tags & Settings Cleanup
+## Iteration 11: Metadata Overhaul — Dynamic Tags & Settings Cleanup ✓
 
 **Goal**: Replace the rigid `cerefox_metadata_keys` registry with a dynamic, data-driven
 approach. Make metadata editing flexible (arbitrary key-value pairs), provide agents with
@@ -373,9 +373,9 @@ Exposed in both the local MCP server (`mcp_server.py`) and the remote Edge Funct
 | 11.14 | Update `_extract_ingest_form()` for dynamic key-value pairs | Done | Paired `meta_key[]`/`meta_value[]` arrays replace `meta__<key>` pattern |
 | 11.15 | Update tests — remove registry tests, add dynamic key tests | Done | 408 tests passing; new tests for MCP tool + form metadata |
 | 11.16 | Update docs — plan.md, solution-design.md | Done | Mark tasks done; update architecture docs |
-| 11.17 | Investigate Supabase OAuth 2.1 for MCP authentication | Researched — Deferred | GoTrue owns `/.well-known` on `*.supabase.co`; Supabase BYO MCP auth "coming soon" (no timeline); no current client requires OAuth. See `docs/design-oauth-mcp-auth.md`. Revisit when Supabase ships BYO MCP auth or a must-have client requires OAuth. |
-| 11.18 | Investigate Perplexity integration paths | Deferred — Local MCP to test | Web connector tested and failed (GoTrue conflict). Decision: test Desktop + Helper App + local `cerefox mcp` (bypasses Supabase entirely). Sonar/Agent API are programmatic alternatives but not a priority. |
-| 11.19 | Investigate Gemini integration | Pending | Research Google Gemini MCP support, integration paths (native MCP, API-based), and feasibility |
+| 11.17 | Investigate Supabase OAuth 2.1 for MCP authentication | Researched — Deferred | GoTrue owns `/.well-known` on `*.supabase.co`; Supabase BYO MCP auth "coming soon" (no timeline); no current client requires OAuth. See `docs/research/oauth-mcp-auth.md`. Revisit when Supabase ships BYO MCP auth or a must-have client requires OAuth. |
+| 11.18 | Investigate Perplexity integration paths | Researched — Deferred | Web connector tested and failed (GoTrue conflict). Decision: test Desktop + Helper App + local `cerefox mcp` when convenient. Sonar/Agent API are programmatic alternatives. See `docs/research/oauth-mcp-auth.md` Section 8. |
+| 11.19 | Investigate Gemini integration | Researched — To test | Gemini CLI supports Streamable HTTP + static Bearer headers natively. Should work like Claude Code/Cursor. See `docs/research/gemini-integration.md`. |
 
 **Deliverable**: Metadata is fully open-ended JSONB. Agents can discover existing keys via
 MCP tool. Web UI allows editing any key-value pair. No manual registry to maintain. Settings
@@ -393,7 +393,7 @@ behaviour is retained.
 
 **New config parameters**:
 - `CEREFOX_SMALL_TO_BIG_THRESHOLD` — document size in chars above which chunk-level
-  retrieval kicks in (default: 8000)
+  retrieval kicks in (default: 40000)
 - `CEREFOX_CONTEXT_WINDOW` — number of sibling chunks to include on each side of each
   matched chunk (default: 1)
 
@@ -403,7 +403,7 @@ c2, c3, c4).
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` config params | Pending | Add to `config.py` with defaults 8000 and 1 |
+| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` config params | Pending | Add to `config.py` with defaults 40000 and 1 |
 | 12.2 | Implement `cerefox_expand_context` RPC | Pending | Takes chunk IDs + window size, returns ordered sibling chunks with dedup; callable from Python and Edge Functions |
 | 12.3 | Update `search.py` — apply small-to-big logic post-search | Pending | If doc size > threshold, call expand_context instead of full-doc reconstruction; assemble deduped result |
 | 12.4 | Update `cerefox-search` Edge Function | Pending | Add `expand_context` boolean param (default false for back-compat); apply same threshold logic server-side |
@@ -433,9 +433,9 @@ and testing without requiring the remote Supabase instance.
 
 ## Current Focus
 
-**Iteration 11 in progress.** Metadata overhaul (11.1–11.16) **complete**. OAuth investigation
-(11.17) **researched and deferred**. Perplexity (11.18) **deferred — Desktop + Helper App
-local MCP path to test**. Remaining: Gemini integration research (11.19).
+**Iteration 11 complete.** Metadata overhaul (11.1–11.16) done. OAuth (11.17), Perplexity
+(11.18), and Gemini (11.19) researched — research docs in `docs/research/`. Gemini testing
+deferred to a future session.
 
-**Iteration 12 planned**: True small-to-big retrieval — chunk-level results with N neighbor
+**Iteration 12 next**: True small-to-big retrieval — chunk-level results with N neighbor
 chunks for large documents, deduped and assembled in order.
