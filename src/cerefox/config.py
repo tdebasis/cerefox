@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     version_retention_hours: int = 48
 
     # ── Storage ───────────────────────────────────────────────────────────────
-    backup_dir: str = "./backup-data"
+    backup_dir: str = "./backups"
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = "INFO"

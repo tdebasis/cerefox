@@ -154,6 +154,7 @@ uv run cerefox get-doc <document-id> --version <version-id>
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CEREFOX_BACKUP_DIR` | `./backups` | Local directory where file system backups are stored. Created automatically if it doesn't exist. |
+| `CEREFOX_VERSION_RETENTION_HOURS` | `48` | How long to retain archived document versions (hours). The most recent version is always kept regardless of this setting. |
 
 ---
 
