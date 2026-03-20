@@ -408,16 +408,16 @@ c2, c3, c4).
 
 **Status: Deferred to Iteration 13.** Versioning (12B) was prioritised and completed in full. Small-to-big retrieval will be the primary focus of the next iteration.
 
-**Implementation approach (revised)**: all threshold/expansion logic lives entirely in Postgres (single-implementation principle). `cerefox_expand_context` RPC does the windowed chunk retrieval; `cerefox_search_docs` is extended to call it when `total_chars > threshold`. Python supplies the user-configurable values; the Edge Function passes no threshold params at all — it relies on the RPC defaults (40000 / 1), keeping it a true thin wrapper. `cerefox-mcp` requires no changes.
+**Implementation approach (final)**: all threshold/expansion logic lives entirely in Postgres (single-implementation principle). `cerefox_expand_context` RPC does the windowed chunk retrieval; `cerefox_search_docs` is extended to call it when `total_chars > threshold`. Both params are RPC DEFAULT values only — not in `.env` or `config.py` — following the same convention as `OPENAI_MODEL`/`EMBEDDING_DIMENSIONS` in the Edge Functions. All callers (Python, Edge Functions) get the feature automatically with no code changes beyond the RPC.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` to `config.py` and `.env.example` | Done | Defaults: 40000 chars and 1 neighbor |
-| 12.2 | Implement `cerefox_expand_context` RPC + extend `cerefox_search_docs` | Done | `cerefox_expand_context` already existed; `cerefox_search_docs` gains `p_small_to_big_threshold INT DEFAULT 40000` and `p_context_window INT DEFAULT 1`; branches on `total_chars > threshold`; returns `is_partial BOOL`. RPC defaults are the single source of truth for the Edge Function path. |
-| 12.3 | Update `search.py` — pass threshold params to RPC | Done | Pass `settings.small_to_big_threshold` and `settings.context_window` from config; allows user to override or disable via `.env`. |
-| 12.4 | ~~Update `cerefox-search` Edge Function~~ | Removed | No change needed — Edge Function is a true thin wrapper; small-to-big is transparent to it. RPC defaults (40000 / 1) activate the feature automatically. |
-| 12.5 | ~~Update `cerefox-mcp` Edge Function~~ | Removed | cerefox-mcp delegates entirely to cerefox-search; no changes needed. |
-| 12.6 | Write tests — threshold boundary, dedup, ordering, N=0/1/2 | Deferred | Unit tests mocking `cerefox_search_docs` response + integration tests for full search path via Python client. |
+| 12.1 | ~~Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` to `config.py` and `.env.example`~~ | Removed | Design revised: these are RPC-level tuning params, not `.env` config. Defaults live in `rpcs.sql`; change them there and redeploy. Documented in `configuration.md` § "RPC-level retrieval parameters". |
+| 12.2 | Implement `cerefox_expand_context` RPC + extend `cerefox_search_docs` | Done | `cerefox_expand_context` already existed; `cerefox_search_docs` gains `p_small_to_big_threshold INT DEFAULT 40000` and `p_context_window INT DEFAULT 1`; branches on `total_chars > threshold`; returns `is_partial BOOL`. |
+| 12.3 | ~~Update `search.py` — pass threshold params to RPC~~ | Removed | No change needed — Python passes no threshold params; RPC defaults handle all paths uniformly. `DocResult.is_partial` field added to surface the flag to callers. |
+| 12.4 | ~~Update `cerefox-search` Edge Function~~ | Removed | True thin wrapper; feature is transparent. RPC defaults activate it automatically. |
+| 12.5 | ~~Update `cerefox-mcp` Edge Function~~ | Removed | Delegates entirely to `cerefox-search`; no changes needed. |
+| 12.6 | Write tests | Partial | **Done**: Python-layer unit tests — `DocResult.is_partial` field (4 tests), `TestSearchDocs` class covering is_partial propagation, total_chars preservation, mixed results, empty results (5 tests). **Pending**: e2e tests against live DB for SQL-level behaviour — threshold boundary, dedup correctness, chunk ordering, N=0/1/2 window sizes. These require a live Supabase instance; add to `tests/e2e/test_api_e2e.py` in a future session. |
 
 ### 12B: Implicit Document Versioning
 
