@@ -34,6 +34,8 @@ def test_settings() -> Settings:
             "CEREFOX_MAX_RESPONSE_BYTES": "65000",
             "CEREFOX_METADATA_STRICT": "true",
             "CEREFOX_LOG_LEVEL": "DEBUG",
+            # Pin to config default so tests don't inherit values from .env
+            "CEREFOX_VERSION_RETENTION_HOURS": "48",
         },
         clear=False,
     ):

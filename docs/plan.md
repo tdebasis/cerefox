@@ -406,14 +406,16 @@ document. Below a configurable threshold, current full-document behaviour is ret
 deduplicated. Example: matched = c1, c3; N=1 → c0, c1, c2, c3, c4 (not c0, c1, c2,
 c2, c3, c4).
 
+**Status: Deferred to Iteration 13.** Versioning (12B) was prioritised and completed in full. Small-to-big retrieval will be the primary focus of the next iteration.
+
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` config params | Pending | Add to `config.py` with defaults 40000 and 1 |
-| 12.2 | Implement `cerefox_expand_context` RPC | Pending | Takes chunk IDs + window size, returns ordered sibling chunks with dedup; callable from Python and Edge Functions |
-| 12.3 | Update `search.py` — apply small-to-big logic post-search | Pending | If doc size > threshold, call expand_context instead of full-doc reconstruction; assemble deduped result |
-| 12.4 | Update `cerefox-search` Edge Function | Pending | Apply threshold logic server-side |
-| 12.5 | Update `cerefox-mcp` Edge Function | Pending | Pass through to cerefox-search |
-| 12.6 | Write tests — threshold boundary, dedup, ordering, N=0/1/2 | Pending | Unit tests for RPC logic + integration tests for full search path |
+| 12.1 | Add `CEREFOX_SMALL_TO_BIG_THRESHOLD` and `CEREFOX_CONTEXT_WINDOW` config params | Deferred | Add to `config.py` with defaults 40000 and 1 |
+| 12.2 | Implement `cerefox_expand_context` RPC | Deferred | Takes chunk IDs + window size, returns ordered sibling chunks with dedup; callable from Python and Edge Functions |
+| 12.3 | Update `search.py` — apply small-to-big logic post-search | Deferred | If doc size > threshold, call expand_context instead of full-doc reconstruction; assemble deduped result |
+| 12.4 | Update `cerefox-search` Edge Function | Deferred | Apply threshold logic server-side |
+| 12.5 | Update `cerefox-mcp` Edge Function | Deferred | Pass through to cerefox-search |
+| 12.6 | Write tests — threshold boundary, dedup, ordering, N=0/1/2 | Deferred | Unit tests for RPC logic + integration tests for full search path |
 
 ### 12B: Implicit Document Versioning
 
