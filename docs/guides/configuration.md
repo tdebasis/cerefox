@@ -124,6 +124,31 @@ Cerefox has two access paths, and each has its own size budget:
 
 ---
 
+## Versioning
+
+Cerefox automatically archives previous document content whenever a document is updated with new content. Archived chunks are preserved and searchable via the versioning API, but excluded from live search results.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CEREFOX_VERSION_RETENTION_HOURS` | `48` | How many hours to keep archived document versions. Versions older than this are lazily deleted the next time the same document is updated. Always keeps at least the most recent version regardless of age. |
+
+**How versioning works:**
+
+When a document's content changes during ingestion, Cerefox calls the `cerefox_snapshot_version` database function before writing new chunks. This function:
+1. Creates a version record in `cerefox_document_versions`
+2. Moves all current chunks to that version (by setting their `version_id`)
+3. Deletes stale versions older than `CEREFOX_VERSION_RETENTION_HOURS`
+
+Metadata-only updates (same content, different title or project) do **not** create a new version.
+
+To view and retrieve previous versions:
+```bash
+uv run cerefox list-versions <document-id>
+uv run cerefox get-doc <document-id> --version <version-id>
+```
+
+---
+
 ## Storage & Backup
 
 | Variable | Default | Description |

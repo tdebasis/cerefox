@@ -98,7 +98,7 @@ class FileSystemBackup:
         filename = f"cerefox-{ts_str}{('-' + label) if label else ''}.json"
         dest = self._backup_dir / filename
 
-        documents = self._client.list_documents()
+        documents = self._client.list_all_documents()
         doc_count = len(documents)
         chunk_count = 0
 

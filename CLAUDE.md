@@ -158,6 +158,74 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 - Tag on `main`: `v0.1.0`, `v0.2.0`
 - Annotated tags: `git tag -a v0.1.0 -m "First public release"`
 
+## Edge Functions & MCP Architecture
+
+### The Pattern: One Edge Function Per Operation
+
+Every Cerefox operation is implemented **once** in a Postgres RPC (SECURITY DEFINER function). Edge Functions are thin HTTP adapters over those RPCs — nothing more.
+
+```
+Agent / MCP client
+      │
+      ▼  (anon key, JWT validated by Supabase gateway)
+cerefox-mcp  ──internal fetch──▶  cerefox-search        ──supabase.rpc──▶  cerefox_hybrid_search
+             ──internal fetch──▶  cerefox-ingest         ──supabase.rpc──▶  cerefox_ingest_document
+             ──internal fetch──▶  cerefox-metadata       ──supabase.rpc──▶  cerefox_list_metadata_keys
+             ──internal fetch──▶  cerefox-get-document   ──supabase.rpc──▶  cerefox_get_document
+             ──internal fetch──▶  cerefox-list-versions  ──supabase.rpc──▶  cerefox_list_document_versions
+
+GPT Actions (Custom GPT) ──────▶  cerefox-search        (same Edge Functions, direct HTTP)
+                         ──────▶  cerefox-ingest
+                         ──────▶  cerefox-metadata
+                         ──────▶  cerefox-get-document
+                         ──────▶  cerefox-list-versions
+
+Python CLI / Web UI ───────────▶  cerefox.db.client     ──psycopg2 / REST──▶  same RPCs
+```
+
+### Auth Pattern
+
+- **Callers** (agents, GPT Actions, web UI) use the **anon key** (JWT). The Supabase API gateway validates it before the request reaches any function.
+- **Edge Functions** call Postgres RPCs using `SUPABASE_SERVICE_ROLE_KEY` internally. Callers never see the service-role key.
+- `cerefox-mcp` forwards the caller's `Authorization` header to dedicated Edge Functions. Those functions ignore it and use `SUPABASE_SERVICE_ROLE_KEY` directly.
+
+### Single Implementation Principle
+
+Business logic lives **only in Postgres RPCs**. If you need to add logic to a tool:
+1. Add or modify the RPC in `src/cerefox/db/rpcs.sql`
+2. The Python client (`db/client.py`) calls the RPC via `supabase.rpc()`
+3. The dedicated Edge Function calls the same RPC via `supabase.rpc()`
+4. `cerefox-mcp` delegates to the dedicated Edge Function via `fetch()`
+
+**Do NOT** add business logic directly in Edge Function TypeScript, Python routes, or `cerefox-mcp`. The only logic in Edge Functions is input validation, RPC call, and JSON response formatting.
+
+### Edge Function Inventory
+
+| Edge Function | Purpose | Called By |
+|---|---|---|
+| `cerefox-search` | Hybrid FTS + semantic search; handles server-side embedding | cerefox-mcp, GPT Actions, Python client |
+| `cerefox-ingest` | Ingest document; chunks, embeds, versions, stores | cerefox-mcp, GPT Actions, Python client |
+| `cerefox-metadata` | List metadata keys with doc counts + example values | cerefox-mcp, GPT Actions |
+| `cerefox-get-document` | Retrieve full doc content; supports archived versions | cerefox-mcp, GPT Actions |
+| `cerefox-list-versions` | List archived version history for a document | cerefox-mcp, GPT Actions |
+| `cerefox-mcp` | MCP Streamable HTTP adapter; delegates all 5 tools above | Claude Code, Cursor, Claude Desktop (via supergateway) |
+
+### Edge Function Model Config
+
+`OPENAI_MODEL` and `EMBEDDING_DIMENSIONS` are TypeScript constants inside each Edge Function (not Supabase secrets). They are not sensitive — they're configuration. Changing the model requires editing the constant and redeploying the function (`npx supabase functions deploy <name>`). This is by design: changing the embedding model is a breaking schema change that also requires `cerefox reindex` to re-embed all existing chunks, so a redeploy is expected.
+
+### Client Compatibility
+
+| Client | How to connect | Notes |
+|---|---|---|
+| Claude Code | `claude mcp add --transport http cerefox <url> --header "Authorization: Bearer <anon-key>"` | Direct Streamable HTTP |
+| Cursor | `url` + `headers.Authorization` in mcp.json | Same as Claude Code |
+| Claude Desktop | `npx -y supergateway --streamableHttp <url> --header "Authorization: Bearer <anon-key>"` | `supergateway` is required; `mcp-remote` does NOT work (GoTrue OAuth conflict) |
+| ChatGPT | Custom GPT + GPT Actions (OpenAPI spec pointing at Edge Functions) | Streamable HTTP MCP not supported by ChatGPT |
+| Claude.ai web | Not supported | No native Streamable HTTP MCP |
+
+---
+
 ## Key Design Decisions
 
 1. **Two-table schema** (documents + chunks) instead of single flat table — enables clean document lifecycle management and small-to-big retrieval
@@ -165,7 +233,8 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 3. **JSONB metadata** on both documents and chunks — evolvable without schema changes
 4. **Greedy section accumulation** — sections (H1/H2/H3) are accumulated into a buffer until adding the next would exceed `max_chunk_chars`; no hard heading-level boundaries
 5. **Cloud-only embeddings** (OpenAI / Fireworks) — local models (mpnet, Ollama) removed; they caused platform-specific failures and added install complexity
-6. **Supabase Edge Functions** (`cerefox-search`, `cerefox-ingest`, `cerefox-mcp`) — embed server-side so agents never need a local embedding model; `cerefox-mcp` is the recommended MCP endpoint for all Claude/Cursor clients (via Streamable HTTP); Claude Desktop uses `supergateway` as a stdio-to-HTTP bridge; `mcp-remote` does NOT work with Supabase (GoTrue OAuth conflict)
+6. **Edge Function per operation** — each operation has a dedicated Edge Function that is a thin HTTP adapter over a Postgres RPC; `cerefox-mcp` delegates to dedicated Edge Functions via internal fetch; single implementation principle (see above)
+7. **Chunks-anchored versioning** — `version_id IS NULL` = current version; `version_id = <uuid>` = archived; partial indexes automatically exclude archived chunks from search; no separate content table
 
 ## Documentation as Source of Truth
 

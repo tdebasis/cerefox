@@ -64,8 +64,14 @@ class Settings(BaseSettings):
     # matches typically 0.45+. 0.50 is a reasonable default.
     min_search_score: float = 0.50
 
+    # ── Versioning ────────────────────────────────────────────────────────────
+    # How long to retain archived document versions. The most recent version is
+    # always kept regardless of this setting (accidental-deletion protection).
+    # Older versions beyond this window are lazily deleted on the next update.
+    version_retention_hours: int = 48
+
     # ── Storage ───────────────────────────────────────────────────────────────
-    backup_dir: str = "./backups"
+    backup_dir: str = "./backup-data"
 
     # ── Logging ───────────────────────────────────────────────────────────────
     log_level: str = "INFO"

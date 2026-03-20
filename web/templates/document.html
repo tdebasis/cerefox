@@ -104,6 +104,14 @@
 </details>
 {% endif %}
 
+{# ── Version history ── #}
+{% if versions %}
+<div style="margin-bottom:1.5rem;padding:0.75rem 1rem;border:1px solid var(--pico-muted-border-color);border-radius:var(--pico-border-radius);font-size:0.88rem;line-height:2;">
+  <span style="font-weight:600;color:var(--pico-muted-color);margin-right:0.5rem;">Backup Versions:</span>
+  {% for v in versions %}<span style="margin-right:1rem;">v{{ v.version_number }} [{{ "{:,}".format(v.total_chars) }} chars · <time datetime="{{ v.created_at }}" title="{{ v.created_at }}">{{ v.created_at[:10] }}</time> · <a href="/document/{{ doc.document_id }}/download?version_id={{ v.version_id }}">download</a>]</span>{% endfor %}
+</div>
+{% endif %}
+
 {# ── Chunks — loaded lazily via HTMX ── #}
 <h2>Chunks</h2>
 <div id="doc-chunks">

@@ -50,15 +50,14 @@ OPENAI_API_KEY=sk-...your-openai-key...
 uv run python scripts/db_deploy.py
 ```
 
-You should see:
-```
-✓ Schema deployed successfully (4 tables, 5 functions, 2 indexes)
-```
+You should see all steps complete with `✓  Done` and a final `✓  Deployment complete` message.
 
 Verify:
 ```bash
 uv run python scripts/db_status.py
 ```
+
+This should show `✓  All checks passed.`
 
 ---
 

@@ -63,7 +63,8 @@ client; you can also run both in parallel.
 - For Claude Code: no extra dependencies (native HTTP transport)
 
 **For Path B (Edge Functions / GPT Actions) only:**
-- Supabase Edge Functions deployed (`cerefox-search`, `cerefox-ingest`, and `cerefox-metadata`) —
+- Supabase Edge Functions deployed: `cerefox-search`, `cerefox-ingest`, `cerefox-metadata`,
+  `cerefox-get-document`, `cerefox-list-versions` —
   see `setup-supabase.md` → Step 8 for the deploy procedure (`npx supabase functions deploy`)
 - Your **anon key**: Supabase Dashboard → Project Settings → API → `anon public`
 - Your **project ref**: visible in the Supabase Dashboard URL
@@ -92,12 +93,19 @@ no HTTP calls, no GET-only limitations.
 
 ### Path A MCP tools
 
-Once configured, every Path A client has these two tools:
+Once configured, every Path A client has these tools:
 
 | Tool | Description |
 |------|-------------|
 | `cerefox_search` | Hybrid (FTS + semantic) document-level search |
 | `cerefox_ingest` | Save a note or document to the knowledge base |
+| `cerefox_list_metadata_keys` | List all metadata keys in use across documents |
+| `cerefox_get_document` | Retrieve the full content of a document (current or archived version) |
+| `cerefox_list_versions` | List all archived versions of a document |
+
+> The versioning tools (`cerefox_get_document`, `cerefox_list_versions`) are available on
+> all paths — Path A (local and remote MCP) and Path B (GPT Actions via
+> `cerefox-get-document` and `cerefox-list-versions` Edge Functions).
 
 ### Path A system prompt
 
@@ -427,7 +435,7 @@ In the action editor, paste this schema (replace `<your-project-ref>`):
 openapi: 3.1.0
 info:
   title: Cerefox Knowledge Base
-  version: 1.1.0
+  version: 1.3.0
 servers:
   - url: https://<your-project-ref>.supabase.co/functions/v1
 paths:
@@ -459,7 +467,10 @@ paths:
   /cerefox-ingest:
     post:
       operationId: ingestNote
-      summary: Save a note to the knowledge base
+      summary: >
+        Save a note to the knowledge base. When update_if_exists is true and the
+        document already exists, the previous version is archived automatically —
+        you can retrieve it later with getDocument.
       requestBody:
         required: true
         content:
@@ -484,8 +495,9 @@ paths:
                   default: false
                   description: >
                     When true, update an existing document with the same title
-                    instead of creating a new one. If content is unchanged,
-                    the document is skipped (no re-indexing).
+                    instead of creating a new one. The previous content is archived
+                    as a version. If content is unchanged, the document is skipped
+                    (no re-indexing).
       responses:
         '200':
           description: Ingest result
@@ -503,6 +515,58 @@ paths:
       responses:
         '200':
           description: Array of metadata keys with doc_count and example_values
+  /cerefox-get-document:
+    post:
+      operationId: getDocument
+      summary: >
+        Retrieve the full reconstructed content of a document (current version or a specific
+        archived version). Use listVersions first to discover available version UUIDs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [document_id]
+              properties:
+                document_id:
+                  type: string
+                  description: UUID of the document to retrieve
+                version_id:
+                  type: string
+                  description: >
+                    UUID of a specific archived version to retrieve. Omit (or pass null)
+                    for the current version. Version UUIDs are returned by listVersions.
+      responses:
+        '200':
+          description: >
+            Document content and metadata:
+            { document_id, doc_title, full_content, chunk_count, total_chars,
+              is_archived, version_id }
+        '404':
+          description: Document not found
+  /cerefox-list-versions:
+    post:
+      operationId: listVersions
+      summary: >
+        List all archived versions of a document, newest first. Returns version UUIDs
+        to pass to getDocument for historical content retrieval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [document_id]
+              properties:
+                document_id:
+                  type: string
+                  description: UUID of the document whose version history to list
+      responses:
+        '200':
+          description: >
+            Array of version objects (empty array if no versions exist):
+            [{ version_id, version_number, source, chunk_count, total_chars, created_at }]
 ```
 
 **Step 3 — Configure authentication**
@@ -674,7 +738,28 @@ Save a note or document to the knowledge base.
 | `project_name` | string | optional | Assign to a project (created if absent) |
 | `source` | string | `"agent"` | Origin label |
 | `metadata` | object | `{}` | Arbitrary JSON metadata |
-| `update_if_exists` | boolean | `false` | When true, update an existing document with the same title instead of creating a new one. Content is re-indexed only if it changed. |
+| `update_if_exists` | boolean | `false` | When true, update an existing document with the same title instead of creating a new one. The previous version is archived automatically. Content is re-indexed only if it changed. |
+
+### `cerefox_list_metadata_keys`
+
+No parameters. Returns all distinct metadata keys currently in use across documents, with document counts and up to 5 example values per key.
+
+### `cerefox_get_document`
+
+Retrieve the full reconstructed content of a document. Pass `version_id` to retrieve an archived version; omit it for the current version. Version UUIDs are returned by `cerefox_list_versions`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `document_id` | string | required | UUID of the document to retrieve |
+| `version_id` | string | optional | UUID of a specific archived version; omit for current |
+
+### `cerefox_list_versions`
+
+List all archived versions of a document, newest first. Returns `version_id` (use with `cerefox_get_document`), `version_number`, `source`, `chunk_count`, `total_chars`, and `created_at`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `document_id` | string | required | UUID of the document whose version history to list |
 
 ---
 

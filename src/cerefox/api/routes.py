@@ -14,6 +14,8 @@ Routes:
     POST /document/{document_id}/delete           Delete document
     POST /document/{document_id}/update-content   Replace content by uploading a new file
     GET  /api/check-filename                      HTMX partial: check if a filename already exists
+    GET  /api/documents/{id}                      JSON: full document content (current or by version_id)
+    GET  /api/documents/{id}/versions             JSON: list of archived versions for a document
     GET  /ingest                                  Ingest form
     POST /ingest                                  Handle paste or file upload
     GET  /projects                                Projects list
@@ -300,11 +302,13 @@ def document_view(
             # Fetch created_at/updated_at from the documents table (reconstruct_doc
             # RPC doesn't return them).
             doc_record = client.get_document_by_id(document_id)
+            versions = client.list_document_versions(document_id)
             ctx.update({
                 "doc": doc_row,
                 "doc_projects": doc_projects,
                 "doc_created_at": doc_record.get("created_at") if doc_record else None,
                 "doc_updated_at": doc_record.get("updated_at") if doc_record else None,
+                "versions": versions,
                 "error": None,
             })
     except Exception as exc:
@@ -455,17 +459,24 @@ async def document_update_content(
 @router.get("/document/{document_id}/download")
 def document_download(
     document_id: str,
+    version_id: str | None = Query(None),
     client: CerefoxClient = Depends(get_client),
 ) -> Response:
-    """Return the document's reconstructed markdown content as a file download."""
-    doc = client.reconstruct_doc(document_id)
+    """Return the document's markdown content as a file download.
+
+    Pass ``?version_id=<uuid>`` to download an archived version.
+    """
+    if version_id:
+        doc = client.get_document_content(document_id, version_id=version_id)
+    else:
+        doc = client.reconstruct_doc(document_id)
     if doc is None:
         return Response(status_code=404, content="Document not found")
-    title = doc.get("doc_title") or "document"
     content = doc.get("full_content") or ""
-    # Sanitise title for use as a filename: replace path separators and trim.
-    safe_name = title.replace("/", "-").replace("\\", "-").strip() or "document"
-    filename = f"{safe_name}.md"
+    doc_record = client.get_document_by_id(document_id)
+    source_path = (doc_record or {}).get("source_path") or "document.md"
+    import os  # noqa: PLC0415
+    filename = os.path.basename(source_path) or "document.md"
     return Response(
         content=content,
         media_type="text/markdown; charset=utf-8",
@@ -768,4 +779,43 @@ def delete_project(
     except Exception as exc:
         logger.error("delete_project %s failed: %s", project_id, exc)
     return RedirectResponse("/projects", status_code=303)
+
+
+# ── JSON API — document retrieval & versioning ────────────────────────────────
+
+
+@router.get("/api/documents/{document_id}")
+def api_get_document(
+    document_id: str,
+    version_id: str | None = Query(None),
+    client: CerefoxClient = Depends(get_client),
+):
+    """Return full reconstructed content of a document as JSON.
+
+    Pass ``?version_id=<uuid>`` to retrieve an archived version.
+    Omit it (or pass nothing) to get the current version.
+    Version UUIDs are returned by GET /api/documents/{id}/versions.
+    """
+    doc = client.get_document_content(document_id, version_id=version_id)
+    if doc is None:
+        from fastapi import HTTPException  # noqa: PLC0415
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+@router.get("/api/documents/{document_id}/versions")
+def api_list_document_versions(
+    document_id: str,
+    client: CerefoxClient = Depends(get_client),
+):
+    """Return all archived versions of a document as a JSON array, newest first.
+
+    Each item contains: version_id, version_number, source, chunk_count,
+    total_chars, created_at.
+
+    Pass version_id to GET /api/documents/{id}?version_id=<uuid> to retrieve
+    the full content of a specific version.
+    """
+    versions = client.list_document_versions(document_id)
+    return {"document_id": document_id, "versions": versions}
 

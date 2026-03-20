@@ -20,7 +20,7 @@ from cerefox.backup.fs_backup import BackupInfo, FileSystemBackup
 @pytest.fixture()
 def mock_client() -> MagicMock:
     client = MagicMock()
-    client.list_documents.return_value = [
+    client.list_all_documents.return_value = [
         {"id": "doc-1", "title": "Note A", "content_hash": "hash-a", "chunk_count": 2},
         {"id": "doc-2", "title": "Note B", "content_hash": "hash-b", "chunk_count": 1},
     ]
@@ -90,7 +90,7 @@ class TestCreate:
         assert info.size_bytes > 0
 
     def test_empty_knowledge_base(self, mock_client, tmp_path) -> None:
-        mock_client.list_documents.return_value = []
+        mock_client.list_all_documents.return_value = []
         b = FileSystemBackup(mock_client, backup_dir=str(tmp_path))
         info = b.create()
         assert info.document_count == 0

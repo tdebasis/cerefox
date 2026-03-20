@@ -417,41 +417,142 @@ c2, c3, c4).
 
 ### 12B: Implicit Document Versioning
 
-Every `update_if_exists` preserves the previous content as a version. Lazy retention policy:
-always keep at least 1 previous version; keep all versions within `CEREFOX_VERSION_RETENTION_HOURS`
-(default: 48h); lazily delete expired versions on next update.
+**Design summary** (finalized — see `docs/solution-design.md` section 7 for full spec):
+
+- `cerefox_document_versions` table: stores per-version metadata (version_number, source,
+  created_at). **No content column** — content is reconstructed from archived chunks.
+- `version_id UUID` nullable FK added to `cerefox_chunks`. `NULL` = current (searchable);
+  non-NULL = archived under that version (not searchable, lazily deleted).
+- Partial unique index on `cerefox_chunks(document_id, chunk_index) WHERE version_id IS NULL`
+  — enforces uniqueness of current chunks without touching archived ones.
+- Partial HNSW and GIN (FTS) indexes both carry `WHERE version_id IS NULL` — archived chunks
+  never appear in search at the index level.
+- Single `cerefox_snapshot_version(p_document_id, p_source, p_retention_hours)` SQL RPC:
+  (1) creates a version row, (2) sets `version_id` on all current chunks, (3) runs lazy
+  retention cleanup. Called from both Python (`update_document()`) and TypeScript Edge Functions.
+- Lazy retention: always keep at least 1 version; also keep all versions created within
+  `CEREFOX_VERSION_RETENTION_HOURS` (default 48h). Older versions (beyond the window AND
+  not the most recent one) are deleted inside the same RPC call — no cron needed.
+- Metadata-only updates (title/metadata change, content unchanged): skip versioning entirely.
+- Migration 0003 is additive — no data loss for existing deployments.
+
+#### Step-by-step implementation checklist
+
+**Step 1 — Config**
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.7 | Design `cerefox_document_versions` table | Pending | Stores full content snapshot, metadata snapshot, timestamp, source. No chunks/embeddings. Cascade delete from parent document. |
-| 12.8 | Add `CEREFOX_VERSION_RETENTION_HOURS` config param | Pending | Default 48 hours |
-| 12.9 | Update ingestion pipeline — create version on update | Pending | Before overwriting, snapshot current content to versions table |
-| 12.10 | Implement lazy version cleanup | Pending | On each update: delete versions older than retention window, except always keep the most recent one |
-| 12.11 | Deploy schema migration | Pending | New table + RPC for version listing |
-| 12.12 | Write tests — version creation, retention, lazy cleanup | Pending | Test: single update keeps 1 version, rapid updates keep all within window, cleanup after window |
+| 12.7 | Add `CEREFOX_VERSION_RETENTION_HOURS` to `config.py` | Done | Default `48`; type `int`; `CEREFOX_` prefix |
+
+**Step 2 — Migration file (additive)**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.8 | Create `src/cerefox/db/migrations/0003_add_document_versions.sql` | Done | Additive only: add `cerefox_document_versions` table; add `version_id` column to `cerefox_chunks`; add partial unique index; add partial HNSW + FTS indexes; add RLS on new table; drop plain indexes replaced by partial ones |
+
+**Step 3 — Update schema.sql to reflect final state**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.9 | Update `src/cerefox/db/schema.sql` — add versions table and version_id | Done | Add `cerefox_document_versions` table definition; add `version_id UUID REFERENCES cerefox_document_versions(id) ON DELETE CASCADE` to `cerefox_chunks`; replace plain UNIQUE constraint with partial unique index; replace plain HNSW + GIN indexes with partial (`WHERE version_id IS NULL`); add `idx_cerefox_chunks_version` for archived chunk lookup; add RLS on new table; add `updated_at` trigger on new table |
+
+**Step 4 — New and updated SQL RPCs**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.10 | Write `cerefox_snapshot_version` RPC in `rpcs.sql` | Done | `SECURITY DEFINER SET search_path = public, pg_catalog`; creates version row; `UPDATE cerefox_chunks SET version_id = v_version_id WHERE document_id = p_document_id AND version_id IS NULL`; lazy cleanup (`DELETE FROM cerefox_document_versions WHERE document_id = p_document_id AND created_at < NOW() - p_retention_hours * INTERVAL '1 hour' AND id != (SELECT id FROM cerefox_document_versions WHERE document_id = p_document_id ORDER BY created_at DESC LIMIT 1)`); returns `(version_id, version_number, chunk_count, total_chars)` |
+| 12.11 | Write `cerefox_get_document` RPC in `rpcs.sql` | Done | `(p_document_id UUID, p_version_id UUID DEFAULT NULL)`; `NULL` → `STRING_AGG(content ORDER BY chunk_index) WHERE version_id IS NULL`; non-NULL → `STRING_AGG(content ORDER BY chunk_index) WHERE version_id = p_version_id`; returns `(document_id, title, version_id, content, chunk_count, total_chars, created_at)` |
+| 12.12 | Write `cerefox_list_document_versions` RPC in `rpcs.sql` | Done | `(p_document_id UUID)`; returns all version rows ordered by `created_at DESC`: `(version_id, version_number, source, chunk_count, total_chars, created_at)` |
+| 12.13 | Update all search RPCs — filter archived chunks and surface version count | Done | All chunk joins in `cerefox_hybrid_search`, `cerefox_fts_search`, `cerefox_semantic_search`, `cerefox_search_docs`, `cerefox_reconstruct_doc` must add `AND version_id IS NULL`. Also add `version_count INT` to result columns (subquery: `SELECT COUNT(*) FROM cerefox_document_versions WHERE document_id = d.id`). This lets agents and the web UI know when previous versions exist and can offer retrieval/restore. |
+
+**Step 5 — Python: client.py**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.14 | Add `snapshot_version(document_id, source, retention_hours)` to `client.py` | Done | Calls `cerefox_snapshot_version` RPC; returns `{version_id, version_number, chunk_count, total_chars}` |
+| 12.15 | Add `get_document(document_id, version_id=None)` to `client.py` | Done | Calls `cerefox_get_document` RPC |
+| 12.16 | Add `list_document_versions(document_id)` to `client.py` | Done | Calls `cerefox_list_document_versions` RPC |
+| 12.17 | Remove `delete_chunks_for_document()` from `client.py` (or keep as internal-only) | Done | Kept for delete_document; updated to only delete current chunks (version_id IS NULL) | No longer called from `update_document()`; only called from `delete_document()` |
+
+**Step 6 — Python: ingestion pipeline**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.18 | Update `update_document()` in `pipeline.py` — replace chunk delete with snapshot RPC | Done | When content changes: call `client.snapshot_version(document_id, source, settings.version_retention_hours)` instead of `client.delete_chunks_for_document(document_id)`; then insert new chunks with `version_id = NULL` (default). When content unchanged: no snapshot call. |
+| 12.19 | Add `source` parameter to `update_document()` | Done | Pass-through to `snapshot_version` RPC so version rows record how the update was triggered (e.g., `'file'`, `'paste'`, `'agent'`) |
+
+**Step 7 — REST API endpoints**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.20 | Add `GET /api/documents/{id}` endpoint | Done | Returns full document text via `cerefox_get_document`. Optional `?version_id=<uuid>` query param for historical versions. Response: `{document_id, title, version_id, content, chunk_count, total_chars}` |
+| 12.21 | Add `GET /api/documents/{id}/versions` endpoint | Done | Returns version list via `cerefox_list_document_versions`. Response: array of `{version_id, version_number, source, chunk_count, total_chars, created_at}` |
+
+**Step 8 — MCP server**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.22 | Add `cerefox_get_document` tool to `mcp_server.py` | Done | Params: `document_id` (required), `version_id` (optional). Returns full content as text. |
+| 12.23 | Add `cerefox_list_versions` tool to `mcp_server.py` | Done | Param: `document_id`. Returns version list as formatted text. |
+
+**Step 9 — CLI**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.24 | Add `cerefox get-doc <id>` CLI command | Done | Prints full document text to stdout. `--version <uuid>` flag for historical. |
+| 12.25 | Add `cerefox list-versions <id>` CLI command | Done | Prints version table (version_number, source, size, date) to stdout. |
+
+**Step 10 — db_status.py**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.26 | Update `scripts/db_status.py` — add new table and RPCs to expected lists | Done | Added `cerefox_document_versions` to tables; added `cerefox_snapshot_version`, `cerefox_get_document`, `cerefox_list_document_versions` to functions; updated indexes list |
+
+**Step 11 — Tests**
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.27 | Update `tests/ingestion/test_pipeline.py` — snapshot_version replaces delete_chunks | Done | Mock `client.snapshot_version`; assert it is called on update with content change; assert it is NOT called on metadata-only update |
+| 12.28 | Write `tests/db/test_versioning.py` — version lifecycle tests | Done | Test: first update creates version_id=non-NULL chunks + new version_id=NULL chunks; second update archives again; metadata-only update skips snapshot; lazy cleanup removes versions outside window but keeps newest; cascade delete removes archived chunks |
 
 ### 12C: Full Document Retrieval API
 
-A dedicated API primitive that returns the complete text of a specific document by ID,
-optionally for a specific version. Serves as the complement to small-to-big search: search
-finds the relevant chunks, this API retrieves the full document when needed.
+Full document retrieval is implemented as part of 12B above (`cerefox_get_document` RPC,
+REST endpoint, MCP tool, and CLI command are steps 12.11, 12.20–12.25 in 12B's checklist).
+The Edge Function extension is listed here for tracking:
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.13 | Implement `cerefox_get_document` RPC | Pending | Returns full content + metadata by document ID. Optionally accepts version_id for historical versions. |
-| 12.14 | Implement `cerefox_list_versions` RPC | Pending | Returns version list for a document: version_id, timestamp, size_chars, source |
-| 12.15 | Add REST API endpoint for full document retrieval | Pending | `GET /api/document/{id}?version={version_id}` |
-| 12.16 | Add MCP tool for full document retrieval | Pending | Expose via local MCP server and cerefox-mcp Edge Function |
-| 12.17 | Add CLI command `cerefox get-doc <id>` | Pending | Print full document text; `--version` flag for historical |
-| 12.18 | Write tests for full retrieval + version retrieval | Pending | Happy path, nonexistent ID, nonexistent version |
+| 12.29 | Add `cerefox_get_document` tool to `cerefox-mcp` Edge Function | Done | Initially called RPC directly; refactored in 12.32 to call dedicated Edge Function |
+| 12.30 | Add `cerefox_list_versions` tool to `cerefox-mcp` Edge Function | Done | Initially called RPC directly; refactored in 12.32 to call dedicated Edge Function |
+| 12.31 | Fix `cerefox-ingest` update path to call `cerefox_snapshot_version` instead of raw DELETE | Done | Was directly deleting all chunks; now calls RPC first to archive them as a version before inserting new chunks |
+| 12.32 | Create `cerefox-get-document` and `cerefox-list-versions` standalone Edge Functions | Done | Both callable via anon key; use service-role key internally; cerefox-mcp updated to delegate via fetch; GPT schema v1.3.0 |
 
 ### 12D: Documentation
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 12.19 | Update requirements-and-specs.md | Done | FR-4.10–4.14 and FR-11 added |
-| 12.20 | Update solution-design.md | Pending | Document versioning table design, retrieval flow changes |
-| 12.21 | Update plan.md and CLAUDE.md | Pending | Mark completion, update conventions |
+| 12.D1 | Update requirements-and-specs.md | Done | FR-4.10–4.14 and FR-11 added |
+| 12.D2 | Update solution-design.md | Done | Chunks-anchored versioning design, cerefox_snapshot_version RPC spec, partial indexes, section 7 complete rewrite |
+| 12.D3 | Update plan.md and CLAUDE.md | Done | Iteration complete; all tasks marked |
+| 12.D4 | Update `connect-agents.md` — versioning tools GPT schema + Edge Function pattern | Done | GPT schema v1.3.0 with all 5 operations; single-implementation principle documented in solution-design.md §10.3 |
+
+### 12E: DB Security & Tooling
+
+Hardening the database security posture and completing the migration tooling
+that was planned but not yet implemented.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 12.22 | Enable RLS on all 5 tables (no permissive policies) | Done | Direct anon-key table access blocked; service role + SECURITY DEFINER RPCs unaffected |
+| 12.23 | Pin `search_path` on all 9 functions | Done | All RPCs + trigger function — eliminates mutable search_path Supabase warning |
+| 12.24 | Create `scripts/db_migrate.py` migration runner | Done | `--dry-run`, `--status` flags; bootstraps tracking table; applies pending files in order |
+| 12.25 | Update `db_deploy.py` to stamp migration files after deploy | Done | Prevents `db_migrate.py` re-applying changes already in base schema |
+| 12.26 | Remove obsolete migration files (0001, 0002) | Done | Both fully incorporated in `schema.sql` / `rpcs.sql`; no active users |
+| 12.27 | Fix stale references in `db_status.py` | Done | Removed `cerefox_metadata_keys`, `cerefox_upsert_metadata_key`, `cerefox_delete_metadata_key` |
+| 12.28 | Update `ops-scripts.md` and `quickstart.md` | Done | Document deploy vs migrate workflow, fix hardcoded success message |
+| 12.29 | Fix backup scripts: pagination cap, missing content_hash, missing embeddings | Done | `list_all_documents()` added; embeddings included in chunk export; restore is complete |
+| 12.30 | Add `backup-data/` as default backup dir (gitignored) | Done | `config.py` default changed; `.gitignore` updated; `ops-scripts.md` examples corrected |
 
 **Deliverable**: Large documents return focused context via search. All documents have
 implicit version history with lazy retention. Full document text (current or historical)

@@ -103,6 +103,8 @@ def mock_client():
     client.get_project_doc_counts.return_value = {}
     client.list_metadata_keys.return_value = []
     client.get_document_project_ids.return_value = []
+    client.get_document_by_id.return_value = {"id": "doc-uuid-1", "title": "Test Document", "source_path": "Test Document.md", "created_at": "2026-03-01T00:00:00Z", "updated_at": "2026-03-01T00:00:00Z"}
+    client.list_document_versions.return_value = []
     return client
 
 

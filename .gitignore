@@ -217,3 +217,7 @@ supabase/.temp/
 
 # Local backups of Cerefox KB documents (private operational details)
 docs/research/decision-log-backup.md
+
+# Backup data directory (local snapshots, not for version control)
+backup-data/
+backups/

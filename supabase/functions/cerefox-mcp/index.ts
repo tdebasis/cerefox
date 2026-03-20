@@ -3,23 +3,28 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 /**
  * cerefox-mcp — Supabase Edge Function
  *
- * MCP Streamable HTTP server (spec 2025-03-26). Exposes the same
- * cerefox_search, cerefox_ingest, and cerefox_list_metadata_keys tools,
- * but over HTTPS — no Python install, no local process, works from any
+ * MCP Streamable HTTP server (spec 2025-03-26). Exposes all Cerefox tools
+ * over HTTPS — no Python install, no local process, works from any
  * remote-capable MCP client.
  *
- * This is a thin protocol adapter. All business logic lives in the existing
- * cerefox-search, cerefox-ingest, and cerefox-metadata Edge Functions; this
- * function handles the MCP JSON-RPC 2.0 layer only and delegates tool calls
- * via internal fetch().
+ * This is a thin protocol adapter. All business logic lives in dedicated
+ * Edge Functions; this function handles the MCP JSON-RPC 2.0 layer only
+ * and delegates every tool call via internal fetch():
+ *
+ *   cerefox_search            → cerefox-search
+ *   cerefox_ingest             → cerefox-ingest
+ *   cerefox_list_metadata_keys → cerefox-metadata
+ *   cerefox_get_document       → cerefox-get-document
+ *   cerefox_list_versions      → cerefox-list-versions
  *
  * Authentication: Deployed with standard JWT verification (default).
- * Internal calls to cerefox-search/cerefox-ingest forward the caller's
- * Authorization header (validated by the gateway before reaching this code).
+ * Internal calls forward the caller's Authorization header (validated by
+ * the gateway before reaching this code). Dedicated Edge Functions use
+ * the service-role key internally — callers only need the anon key.
  *
  * Supported clients:
- *   Claude Code  — claude mcp add --transport http cerefox <url> --header "Authorization: Bearer <anon-key>"
- *   Cursor       — url + headers.Authorization in mcp.json
+ *   Claude Code    — claude mcp add --transport http cerefox <url> --header "Authorization: Bearer <anon-key>"
+ *   Cursor         — url + headers.Authorization in mcp.json
  *   Claude Desktop — npx supergateway --streamableHttp <url> --header "Authorization: Bearer <anon-key>"
  */
 
@@ -101,6 +106,40 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {},
+    },
+  },
+  {
+    name: "cerefox_get_document",
+    description:
+      "Retrieve the full reconstructed content of a document. Pass version_id to retrieve an archived version; omit it (or pass null) for the current version. Version UUIDs are returned by cerefox_list_versions.",
+    inputSchema: {
+      type: "object",
+      required: ["document_id"],
+      properties: {
+        document_id: {
+          type: "string",
+          description: "UUID of the document to retrieve",
+        },
+        version_id: {
+          type: "string",
+          description: "UUID of a specific archived version to retrieve (optional)",
+        },
+      },
+    },
+  },
+  {
+    name: "cerefox_list_versions",
+    description:
+      "List all archived versions of a document, newest first. Returns version_id (use with cerefox_get_document), version_number, source, chunk_count, total_chars, and created_at.",
+    inputSchema: {
+      type: "object",
+      required: ["document_id"],
+      properties: {
+        document_id: {
+          type: "string",
+          description: "UUID of the document whose version history to list",
+        },
+      },
     },
   },
 ];
@@ -190,9 +229,6 @@ async function handleToolCall(
       throw new Error(`cerefox-search error: ${errMsg}`);
     }
 
-    // cerefox-search returns:
-    // { results: [...], query, mode, match_count, project_name, truncated, response_bytes }
-    // Serialise the full response object so the agent gets structured results.
     const result = data as {
       results: unknown[];
       query: string;
@@ -205,9 +241,6 @@ async function handleToolCall(
       return "No results found.";
     }
 
-    // Format as markdown — same style as the local stdio MCP server.
-    // cerefox_search_docs RPC returns: doc_title, best_score, full_content
-    // (not "content" / "score" — those are chunk-level field names).
     const rows = result.results as Array<{
       doc_title?: string;
       full_content?: string;
@@ -251,10 +284,6 @@ async function handleToolCall(
       throw new Error(`cerefox-ingest error: ${errMsg}`);
     }
 
-    // cerefox-ingest returns one of:
-    //   { document_id, title, chunk_count, total_chars, project_id?, project_name? }  (201 new)
-    //   { document_id, title, chunk_count, total_chars, updated: true }               (200 updated)
-    //   { document_id, title, skipped: true, message }                                (200 skipped)
     const result = data as {
       document_id: string;
       title: string;
@@ -301,6 +330,66 @@ async function handleToolCall(
     return JSON.stringify(keys, null, 2);
   }
 
+  if (name === "cerefox_get_document") {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/cerefox-get-document`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        document_id: args.document_id,
+        version_id: args.version_id ?? null,
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (resp.status === 404) return "Document not found.";
+
+    if (!resp.ok) {
+      const errMsg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
+      throw new Error(`cerefox-get-document error: ${errMsg}`);
+    }
+
+    const result = data as {
+      doc_title: string;
+      full_content: string;
+      is_archived: boolean;
+    };
+
+    const label = result.is_archived ? " (archived version)" : " (current)";
+    return `# ${result.doc_title}${label}\n\n${result.full_content}`;
+  }
+
+  if (name === "cerefox_list_versions") {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/cerefox-list-versions`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({ document_id: args.document_id }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      const errMsg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
+      throw new Error(`cerefox-list-versions error: ${errMsg}`);
+    }
+
+    const versions = data as Array<{
+      version_id: string;
+      version_number: number;
+      source: string;
+      chunk_count: number;
+      total_chars: number;
+      created_at: string;
+    }>;
+
+    if (!versions?.length) return "No archived versions found for this document.";
+
+    const lines = versions.map((v) =>
+      `v${v.version_number} | ${v.created_at.slice(0, 10)} | ${v.source} | ${v.chunk_count} chunks / ${v.total_chars.toLocaleString()} chars | id: ${v.version_id}`
+    );
+    return `Archived versions (newest first):\n\n${lines.join("\n")}`;
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -316,7 +405,13 @@ async function handleToolsCall(
     return errorResponse(id, -32602, "Invalid params: missing tool name");
   }
 
-  const knownTools = ["cerefox_search", "cerefox_ingest", "cerefox_list_metadata_keys"];
+  const knownTools = [
+    "cerefox_search",
+    "cerefox_ingest",
+    "cerefox_list_metadata_keys",
+    "cerefox_get_document",
+    "cerefox_list_versions",
+  ];
   if (!knownTools.includes(toolName)) {
     return errorResponse(id, -32602, `Unknown tool: ${toolName}`);
   }
@@ -345,7 +440,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // GET — health check for MCP clients that probe before connecting.
-  // Some clients (e.g., Perplexity) send a GET before POSTing the MCP handshake.
   if (req.method === "GET") {
     return jsonResponse({
       name: SERVER_NAME,
@@ -393,7 +487,6 @@ Deno.serve(async (req: Request): Promise<Response> => {
 
     case "initialized":
     case "notifications/initialized":
-      // Notifications have no id; respond with 202 empty body
       return notificationResponse();
 
     case "ping":
