@@ -367,6 +367,12 @@ cerefox_search(query) →
 
 **Why automatic (not a parameter)**: agents shouldn't need to know document sizes or manage retrieval strategy. The threshold is a system-level setting, not a per-query choice.
 
+**Implementation location — Postgres only (single-implementation principle)**: all threshold/expansion logic lives in two Postgres RPCs:
+- `cerefox_expand_context(p_document_id, p_chunk_ids UUID[], p_context_window INT)` — returns ordered, deduplicated sibling chunks for a set of matched chunk IDs.
+- `cerefox_search_docs` — extended with `p_small_to_big_threshold INT` and `p_context_window INT` params. Internally: if `total_chars > threshold`, calls `cerefox_expand_context`; otherwise reconstructs the full document (current behaviour). Returns `is_partial` flag so callers know which path was taken.
+
+Python (`search.py`) and the `cerefox-search` Edge Function are thin pass-throughs that supply the config values as RPC params — no retrieval logic lives outside Postgres. `cerefox-mcp` requires no changes as it already delegates entirely to `cerefox-search`.
+
 **`match_count` semantics**: the parameter controls the number of **distinct documents** returned, not raw chunks. For large documents, each document match expands into multiple chunks (up to `(CEREFOX_CONTEXT_WINDOW * 2 + 1)` chunks per matched chunk hit). The total chunk count returned can exceed `match_count`.
 
 **Context window default (1)**: each matched chunk gains one neighbor on each side — returning 3 contiguous chunks per hit at minimum. Configurable via `CEREFOX_CONTEXT_WINDOW`.
