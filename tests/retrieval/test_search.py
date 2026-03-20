@@ -294,26 +294,6 @@ class TestSearchDocs:
         assert len(resp.results) == 1
         assert isinstance(resp.results[0], DocResult)
 
-    def test_passes_threshold_and_window_from_settings(
-        self, sc, mock_client, test_settings
-    ) -> None:
-        test_settings.small_to_big_threshold = 40_000
-        test_settings.context_window = 2
-        sc_custom = SearchClient(mock_client, sc._embedder, test_settings)
-        sc_custom.search_docs("q")
-        call_kwargs = mock_client.search_docs.call_args[1]
-        assert call_kwargs["small_to_big_threshold"] == 40_000
-        assert call_kwargs["context_window"] == 2
-
-    def test_threshold_zero_disables_small_to_big(
-        self, mock_client, mock_embedder, test_settings
-    ) -> None:
-        test_settings.small_to_big_threshold = 0
-        sc_zero = SearchClient(mock_client, mock_embedder, test_settings)
-        sc_zero.search_docs("q")
-        call_kwargs = mock_client.search_docs.call_args[1]
-        assert call_kwargs["small_to_big_threshold"] == 0
-
     def test_is_partial_false_propagates(self, sc, mock_client) -> None:
         mock_client.search_docs.return_value = [_make_doc_row(is_partial=False)]
         resp = sc.search_docs("q")

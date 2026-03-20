@@ -273,8 +273,6 @@ async def _handle_search(
         alpha=0.7,
         project_id=project_id,
         min_score=settings.min_search_score,
-        small_to_big_threshold=settings.small_to_big_threshold,
-        context_window=settings.context_window,
     )
 
     if not rows:

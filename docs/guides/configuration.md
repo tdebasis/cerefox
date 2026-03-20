@@ -122,6 +122,20 @@ Cerefox has two access paths, and each has its own size budget:
 - For the **local MCP server**, raise `CEREFOX_MAX_RESPONSE_BYTES` in your `.env`
 - For the **Edge Function**, pass `max_bytes` in the request body: `{ "query": "...", "max_bytes": 120000 }`
 
+### RPC-level retrieval parameters
+
+Two retrieval parameters are configured directly in `src/cerefox/db/rpcs.sql` rather than in `.env`. They follow the same convention as `OPENAI_MODEL` and `EMBEDDING_DIMENSIONS` in the Edge Functions: they are system-level tuning knobs that rarely change, and changing them requires a SQL re-deploy (`python scripts/db_deploy.py`) rather than a restart.
+
+| Parameter | Default | Location | Description |
+|-----------|---------|----------|-------------|
+| `p_small_to_big_threshold` | `40000` chars | `rpcs.sql` — `cerefox_search_docs` | Documents larger than this return matched chunks + neighbours instead of the full document. Set to `0` to always return full content. |
+| `p_context_window` | `1` | `rpcs.sql` — `cerefox_search_docs` | Neighbour chunks on each side of each matched chunk. `N=1` → up to 3 contiguous chunks per hit. `N=0` → matched chunks only. `N=2` → up to 5. |
+
+To change these values, edit the `DEFAULT` values in `cerefox_search_docs` in `src/cerefox/db/rpcs.sql` and redeploy:
+```bash
+python scripts/db_deploy.py
+```
+
 ---
 
 ## Versioning

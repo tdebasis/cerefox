@@ -245,8 +245,6 @@ class SearchClient:
             alpha=alpha,
             project_id=project_id,
             min_score=self._settings.min_search_score,
-            small_to_big_threshold=self._settings.small_to_big_threshold,
-            context_window=self._settings.context_window,
         )
         return self._build_doc_response(rows, query=query)
 

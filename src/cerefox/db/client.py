@@ -686,14 +686,12 @@ class CerefoxClient:
         alpha: float = 0.7,
         project_id: str | None = None,
         min_score: float = 0.0,
-        small_to_big_threshold: int = 0,
-        context_window: int = 1,
     ) -> list[dict[str, Any]]:
         """Document-level hybrid search — deduplicates by document, returns content.
 
-        When small_to_big_threshold > 0, documents exceeding that size (in chars)
-        return matched chunks + context_window neighbours instead of the full doc.
-        is_partial=True in the result row indicates partial content was returned.
+        Small-to-big threshold and context window are configured in the RPC
+        (see rpcs.sql — cerefox_search_docs defaults). They are not exposed here
+        because they are system-level tuning params, not per-call options.
         """
         return self.rpc(
             "cerefox_search_docs",
@@ -704,8 +702,6 @@ class CerefoxClient:
                 "p_alpha": alpha,
                 "p_project_id": project_id,
                 "p_min_score": min_score,
-                "p_small_to_big_threshold": small_to_big_threshold,
-                "p_context_window": context_window,
             },
         )
 

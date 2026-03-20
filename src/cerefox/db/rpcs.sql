@@ -419,11 +419,23 @@ $$;
 -- results by document (keeping the best-scoring chunk per document), and
 -- returns up to p_match_count *distinct documents* with their content.
 --
--- Small-to-big behaviour (p_small_to_big_threshold > 0):
---   Documents with total_chars > threshold return matched chunks + N neighbours
---   on each side (deduplicated, sorted by chunk_index) instead of the full doc.
---   is_partial = TRUE when this path is taken. Small docs always return in full.
---   Set p_small_to_big_threshold = 0 (default) to always return full content.
+-- ── RPC-level configuration (not exposed via .env) ────────────────────────────
+-- Two params below are intentionally NOT surfaced in Python config or .env.
+-- They are system-level tuning knobs with the same role as OPENAI_MODEL and
+-- EMBEDDING_DIMENSIONS in the Edge Functions — change them here and redeploy
+-- rpcs.sql (python scripts/db_deploy.py) if you need different values.
+--
+--   p_small_to_big_threshold (default: 40000 chars)
+--     Documents larger than this return matched chunks + neighbours instead of
+--     the full document. Set to 0 to always return full document content.
+--     Changing the embedding model or chunk size may require retuning this.
+--
+--   p_context_window (default: 1)
+--     Neighbour chunks on each side of each matched chunk.
+--     N=1 → up to 3 contiguous chunks per hit (prev, match, next).
+--     N=0 → matched chunks only (no expansion).
+--     N=2 → up to 5 contiguous chunks per hit.
+-- ─────────────────────────────────────────────────────────────────────────────
 --
 -- Parameters:
 --   p_query_text             : Query string (used for FTS)
@@ -432,11 +444,12 @@ $$;
 --   p_alpha                  : Semantic weight 0.0–1.0 (default: 0.7)
 --   p_project_id             : Optional project filter (M2M)
 --   p_min_score              : Minimum cosine similarity for vector results
---   p_small_to_big_threshold : Char threshold above which expansion is used (0 = disabled)
---   p_context_window         : Neighbour chunks on each side of each match (default: 1)
+--   p_small_to_big_threshold : See above (default: 40000)
+--   p_context_window         : See above (default: 1)
 --
 -- Returns one row per document. total_chars is always the full document size.
 -- chunk_count reflects how many chunks are in full_content (may be partial).
+-- is_partial = TRUE when the small-to-big path was taken for that document.
 
 CREATE OR REPLACE FUNCTION cerefox_search_docs(
     p_query_text             TEXT,
