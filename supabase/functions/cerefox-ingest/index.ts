@@ -347,8 +347,17 @@ Deno.serve(async (req: Request) => {
 
       const totalChars = chunks.reduce((s, c) => s + c.char_count, 0);
 
-      // Delete old chunks
-      await supabase.from("cerefox_chunks").delete().eq("document_id", existingDoc.id);
+      // Archive current chunks as a new version before inserting new ones
+      const { error: snapshotErr } = await supabase.rpc("cerefox_snapshot_version", {
+        p_document_id: existingDoc.id,
+        p_source: source,
+      });
+      if (snapshotErr) {
+        return new Response(
+          JSON.stringify({ error: `Failed to snapshot version: ${snapshotErr.message}` }),
+          { status: 500, headers },
+        );
+      }
 
       // Update document record
       await supabase

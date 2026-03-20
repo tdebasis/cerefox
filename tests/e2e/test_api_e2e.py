@@ -254,6 +254,119 @@ class TestDocumentProjectAssignment:
         assert project_id not in unassigned
 
 
+# ── 1b. Versioning lifecycle tests ─────────────────────────────────────────
+
+
+CONTENT_V1 = """\
+# Versioning Test Document
+
+This is version one of the document.
+
+## Section Alpha
+
+Alpha content for the first version.
+"""
+
+CONTENT_V2 = """\
+# Versioning Test Document
+
+This is version two of the document, with different content.
+
+## Section Beta
+
+Beta content replaces alpha in the second version.
+"""
+
+
+class TestVersioningLifecycle:
+    """Ingest → update → verify version created → retrieve version → delete with cascade."""
+
+    def test_update_creates_version_and_archived_chunks(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("Versioning Lifecycle")
+
+        # Create initial document
+        result_v1 = e2e_pipeline.ingest_text(CONTENT_V1, title)
+        doc_id = result_v1.document_id
+        cleanup.track_document(doc_id)
+        assert result_v1.action == "created"
+        chunks_v1 = result_v1.chunk_count
+
+        # No versions yet
+        versions = e2e_client.list_document_versions(doc_id)
+        assert versions == []
+
+        # Update with new content — should create a version
+        result_v2 = e2e_pipeline.update_document(doc_id, CONTENT_V2, title)
+        assert result_v2.reindexed is True
+
+        # Exactly one version should exist (the snapshot of v1)
+        versions = e2e_client.list_document_versions(doc_id)
+        assert len(versions) == 1
+        v = versions[0]
+        assert v["version_number"] == 1
+        assert v["chunk_count"] == chunks_v1
+        assert v["total_chars"] > 0
+        assert v["source"] == "manual"
+        version_id = v["version_id"]
+
+        # Current chunks should reflect v2 content (version_id IS NULL)
+        current_chunks = e2e_client.list_chunks_for_document(doc_id)
+        assert len(current_chunks) == result_v2.chunk_count
+        assert all(c["version_id"] is None for c in current_chunks)
+
+        # Retrieve archived v1 content
+        v1_content = e2e_client.get_document_content(doc_id, version_id=version_id)
+        assert v1_content is not None
+        assert "Alpha content" in v1_content["full_content"]
+        assert "Beta content" not in v1_content["full_content"]
+
+        # Current content via reconstruct_doc should be v2
+        current = e2e_client.reconstruct_doc(doc_id)
+        assert "Beta content" in current["full_content"]
+        assert "Alpha content" not in current["full_content"]
+
+        # Delete document — versions and archived chunks should cascade
+        e2e_client.delete_document(doc_id)
+        cleanup.document_ids.remove(doc_id)
+
+        assert e2e_client.get_document_by_id(doc_id) is None
+        assert e2e_client.list_chunks_for_document(doc_id) == []
+        assert e2e_client.list_document_versions(doc_id) == []
+
+    def test_metadata_only_update_skips_versioning(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("Versioning Metadata Only")
+
+        result = e2e_pipeline.ingest_text(CONTENT_V1, title)
+        doc_id = result.document_id
+        cleanup.track_document(doc_id)
+
+        # Update with identical content (metadata change only)
+        result2 = e2e_pipeline.update_document(doc_id, CONTENT_V1, title)
+        assert result2.reindexed is False
+
+        # No version should have been created
+        versions = e2e_client.list_document_versions(doc_id)
+        assert versions == []
+
+
 # ── 2. Edge Function tests ─────────────────────────────────────────────────
 
 

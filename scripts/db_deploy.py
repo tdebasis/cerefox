@@ -24,6 +24,7 @@ from cerefox.config import Settings
 # SQL files to apply, in order
 _SCHEMA_FILE = Path(__file__).parent.parent / "src" / "cerefox" / "db" / "schema.sql"
 _RPCS_FILE = Path(__file__).parent.parent / "src" / "cerefox" / "db" / "rpcs.sql"
+_MIGRATIONS_DIR = Path(__file__).parent.parent / "src" / "cerefox" / "db" / "migrations"
 
 # Tables to drop in --reset mode (order matters for FK constraints)
 _RESET_SQL = """
@@ -120,11 +121,26 @@ def main() -> None:
     if args.reset:
         steps.append((_RESET_SQL, "Reset: drop existing Cerefox objects"))
 
+    # Build stamp SQL: mark all migration files as already applied.
+    # These changes are incorporated in schema.sql/rpcs.sql, so db_migrate.py
+    # must not re-apply them on an existing database.
+    migration_files = sorted(f.name for f in _MIGRATIONS_DIR.glob("*.sql"))
+    if migration_files:
+        values = ", ".join(f"('{name}')" for name in migration_files)
+        stamp_sql = (
+            f"INSERT INTO cerefox_migrations (filename) VALUES {values} "
+            f"ON CONFLICT (filename) DO NOTHING;"
+        )
+    else:
+        stamp_sql = None
+
     steps.extend([
         (_EXTENSIONS_SQL, "Enable extensions (uuid-ossp, vector/pgvector)"),
         (schema_sql, "Apply schema (tables, indexes, triggers)"),
         (rpcs_sql, "Apply RPCs (search functions)"),
     ])
+    if stamp_sql:
+        steps.append((stamp_sql, "Stamp migration files as already applied"))
 
     success_count = 0
     for sql, label in steps:

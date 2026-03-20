@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -165,3 +166,57 @@ class TestDocumentView:
 
         # Should show document detail
         expect(page.locator("text=Edit")).to_be_visible()
+
+
+class TestVersioningUI:
+    def test_upload_new_file_creates_version_row(
+        self, page: Page, e2e_client: CerefoxClient, tmp_path: Path
+    ):
+        """Ingest a file via UI, upload a new version, verify Backup Versions row appears, delete."""
+        title = _unique_title("Versioning UI Test")
+
+        # ── Step 1: ingest original document via paste form ──────────────────
+        page.goto(f"{BASE_URL}/ingest")
+        page.fill('input[name="title"]', title)
+        page.fill('textarea[name="content"]', "# Version One\n\nOriginal content for UI versioning test.")
+        page.click('button:has-text("Ingest")')
+        page.wait_for_timeout(2000)
+
+        # Find the created document ID via API
+        docs = e2e_client.list_documents(limit=50)
+        doc = next((d for d in docs if d.get("title") == title), None)
+        if doc is None:
+            pytest.fail(f"Document '{title}' not found after ingest")
+        doc_id = doc["id"]
+
+        try:
+            # ── Step 2: navigate to document page ────────────────────────────
+            page.goto(f"{BASE_URL}/document/{doc_id}")
+            page.wait_for_timeout(500)
+            expect(page.locator("h1")).to_contain_text(title)
+
+            # Backup Versions row should NOT be visible yet (no versions exist)
+            expect(page.locator("text=Backup Versions")).not_to_be_visible()
+
+            # ── Step 3: open upload section and upload a new file ────────────
+            page.click('button:has-text("Upload new File")')
+            page.wait_for_timeout(300)
+
+            v2_file = tmp_path / "version-two.md"
+            v2_file.write_text("# Version Two\n\nUpdated content for UI versioning test.", encoding="utf-8")
+
+            page.set_input_files('input[name="file"]', str(v2_file))
+            page.click('button:has-text("Upload")')
+            page.wait_for_timeout(3000)
+
+            # ── Step 4: reload document page and verify version row ──────────
+            page.goto(f"{BASE_URL}/document/{doc_id}")
+            page.wait_for_timeout(500)
+
+            expect(page.locator("text=Backup Versions")).to_be_visible(timeout=5000)
+            expect(page.locator("text=v1")).to_be_visible()
+            expect(page.locator("a:has-text('download')")).to_be_visible()
+
+        finally:
+            # ── Cleanup ──────────────────────────────────────────────────────
+            e2e_client.delete_document(doc_id)

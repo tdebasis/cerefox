@@ -42,7 +42,7 @@
     {{ label }}
   </button>
   <span class="confirm-actions" hidden style="display:inline-flex;gap:.4rem;align-items:center;">
-    <button type="submit" class="{{ _cls }}">Confirm</button>
+    <button type="submit" class="{{ _cls }}" style="color:var(--pico-del-color,#c0392b);">Confirm</button>
     <button type="button" class="outline secondary {{ _sz }}"
             onclick="var g=this.closest('.inline-confirm');g.querySelector('.confirm-actions').hidden=true;g.querySelector('button:first-child').hidden=false;">
       ✕

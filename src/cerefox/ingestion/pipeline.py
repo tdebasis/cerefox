@@ -146,6 +146,7 @@ class IngestionPipeline:
                     document_id=existing_doc["id"],
                     text=text,
                     title=title,
+                    source=source,
                     project_ids=resolved_ids if resolved_ids else None,
                     metadata=metadata,
                 )
@@ -182,6 +183,14 @@ class IngestionPipeline:
         total_chars = sum(c.char_count for c in chunks)
 
         # ── Create document record ─────────────────────────────────────────
+        # Derive a source_path from the title when none was provided (e.g. paste ingestion),
+        # so every document always has a meaningful filename for downloads.
+        if not source_path:
+            import re  # noqa: PLC0415
+            slug = re.sub(r"[^\w\s-]", "", title.lower())
+            slug = re.sub(r"[\s_-]+", "-", slug).strip("-") or "document"
+            source_path = f"{slug}.md"
+
         doc_row = self._client.insert_document(
             {
                 "title": title,
@@ -236,15 +245,20 @@ class IngestionPipeline:
         document_id: str,
         text: str,
         title: str,
+        source: str = "manual",
         project_id: str | None = None,
         project_ids: list[str] | None = None,
         metadata: dict | None = None,
     ) -> IngestResult:
         """Re-ingest an existing document in place, preserving its ID.
 
-        Replaces the document's content, title, and metadata. Old chunks are
-        deleted and new ones are computed from the provided text. The document
-        UUID is kept, so any external references remain valid.
+        When content changes, archives current chunks as a version (via
+        cerefox_snapshot_version RPC) before inserting new ones. This provides
+        accidental-deletion protection — previous content is recoverable for up
+        to ``settings.version_retention_hours`` hours.
+
+        When only title/metadata changes (content unchanged), no version is
+        created and no re-embedding is performed.
 
         Project assignments are only updated when ``project_ids`` (or legacy
         ``project_id``) is explicitly provided; ``None`` leaves current
@@ -254,6 +268,8 @@ class IngestionPipeline:
             document_id: UUID of the document to update.
             text: New markdown content.
             title: New document title.
+            source: Origin label stored in the version record (e.g. ``"file"``,
+                ``"paste"``, ``"agent"``).
             project_id: Single project UUID (legacy; prefer ``project_ids``).
             project_ids: New list of project UUIDs.  ``None`` = unchanged;
                 ``[]`` = remove from all projects.
@@ -333,8 +349,23 @@ class IngestionPipeline:
         texts = [c.content for c in chunks]
         embeddings = self._embedder.embed_batch(texts) if chunks else []
 
-        # ── Swap chunks ────────────────────────────────────────────────────
-        self._client.delete_chunks_for_document(document_id)
+        # ── Archive current chunks as a version ────────────────────────────
+        # cerefox_snapshot_version atomically:
+        #   1. Creates a version row in cerefox_document_versions.
+        #   2. Sets version_id on all current chunks (marks them archived).
+        #   3. Runs lazy retention cleanup.
+        version_info = self._client.snapshot_version(
+            document_id,
+            source=source,
+            retention_hours=s.version_retention_hours,
+        )
+        log.info(
+            "Archived %d chunks for document %s as version %d (id=%s)",
+            version_info.get("chunk_count", 0),
+            document_id,
+            version_info.get("version_number", 0),
+            version_info.get("version_id", ""),
+        )
 
         # ── Update document record ─────────────────────────────────────────
         update_data = {

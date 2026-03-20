@@ -13,21 +13,39 @@
 DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID);
 DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID, FLOAT);
 
--- Drop old hybrid/fts/search_docs/reconstruct_doc signatures that returned
--- doc_project_id UUID (singular); new versions return doc_project_ids UUID[] (array).
+-- Drop old 6-param hybrid_search (pre p_min_score, pre M2M join, used d.project_id column).
+DROP FUNCTION IF EXISTS cerefox_hybrid_search(TEXT, VECTOR(768), INT, FLOAT, BOOLEAN, UUID);
+
+-- Drop old 7-param hybrid_search that returned doc_project_id UUID (singular, pre-M2M).
 DROP FUNCTION IF EXISTS cerefox_hybrid_search(TEXT, VECTOR(768), INT, FLOAT, BOOLEAN, UUID, FLOAT);
-DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
+
+-- Drop old 5-param search_docs (pre p_min_score).
+DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID);
+
+-- Drop 6-param search_docs that returned doc_project_id UUID (singular) or lacked doc_updated_at.
 DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT);
+
+DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
 DROP FUNCTION IF EXISTS cerefox_reconstruct_doc(UUID);
 
--- Drop search_docs without doc_updated_at (return type changed to add that column).
+-- Drop current signatures before adding version_count to their return types.
+-- Iteration 12B: all chunk-level and document-level search results now include
+-- version_count so agents and the web UI know when previous versions are available.
+DROP FUNCTION IF EXISTS cerefox_hybrid_search(TEXT, VECTOR(768), INT, FLOAT, BOOLEAN, UUID, FLOAT);
+DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
+DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID, FLOAT);
+DROP FUNCTION IF EXISTS cerefox_reconstruct_doc(UUID);
 DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT);
 
 -- ── Shared return type note ────────────────────────────────────────────────────
 -- All chunk-level search RPCs return the same shape for consistency:
 --   chunk_id, document_id, chunk_index, title, content, heading_path,
---   heading_level, score, doc_title, doc_source, doc_project_ids, doc_metadata
+--   heading_level, score, doc_title, doc_source, doc_project_ids, doc_metadata,
+--   version_count
 -- Note: doc_project_ids is UUID[] (array) — a document can belong to many projects.
+-- Note: version_count is INT — number of archived versions for the parent document.
+--       Agents and the web UI use this to know when previous versions are available
+--       for retrieval. 0 means the current content has never been overwritten.
 
 -- ── Hybrid Search ─────────────────────────────────────────────────────────────
 -- Combines full-text search (FTS) and vector similarity with a configurable
@@ -47,21 +65,23 @@ CREATE OR REPLACE FUNCTION cerefox_hybrid_search(
     p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
-    chunk_id       UUID,
-    document_id    UUID,
-    chunk_index    INT,
-    title          TEXT,
-    content        TEXT,
-    heading_path   TEXT[],
-    heading_level  INT,
-    score          FLOAT,
-    doc_title      TEXT,
-    doc_source     TEXT,
+    chunk_id        UUID,
+    document_id     UUID,
+    chunk_index     INT,
+    title           TEXT,
+    content         TEXT,
+    heading_path    TEXT[],
+    heading_level   INT,
+    score           FLOAT,
+    doc_title       TEXT,
+    doc_source      TEXT,
     doc_project_ids UUID[],
-    doc_metadata   JSONB
+    doc_metadata    JSONB,
+    version_count   INT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
     query_fts tsquery := websearch_to_tsquery('english', p_query_text);
@@ -75,7 +95,8 @@ BEGIN
                 ts_rank_cd(c.fts, query_fts)::FLOAT AS fts_score
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
-            WHERE c.fts @@ query_fts
+            WHERE c.version_id IS NULL
+              AND c.fts @@ query_fts
               AND (p_project_id IS NULL OR EXISTS (
                       SELECT 1 FROM cerefox_document_projects dp
                       WHERE dp.document_id = d.id AND dp.project_id = p_project_id
@@ -94,7 +115,8 @@ BEGIN
                 END AS vec_score
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
-            WHERE (p_project_id IS NULL OR EXISTS (
+            WHERE c.version_id IS NULL
+              AND (p_project_id IS NULL OR EXISTS (
                       SELECT 1 FROM cerefox_document_projects dp
                       WHERE dp.document_id = d.id AND dp.project_id = p_project_id
                   ))
@@ -135,7 +157,9 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
-        d.metadata      AS doc_metadata
+        d.metadata      AS doc_metadata,
+        (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
+         WHERE dv.document_id = d.id) AS version_count
     FROM combined cm
     JOIN cerefox_chunks   c ON c.id = cm.id
     JOIN cerefox_documents d ON c.document_id = d.id
@@ -157,21 +181,23 @@ CREATE OR REPLACE FUNCTION cerefox_fts_search(
     p_project_id  UUID DEFAULT NULL
 )
 RETURNS TABLE (
-    chunk_id       UUID,
-    document_id    UUID,
-    chunk_index    INT,
-    title          TEXT,
-    content        TEXT,
-    heading_path   TEXT[],
-    heading_level  INT,
-    score          FLOAT,
-    doc_title      TEXT,
-    doc_source     TEXT,
+    chunk_id        UUID,
+    document_id     UUID,
+    chunk_index     INT,
+    title           TEXT,
+    content         TEXT,
+    heading_path    TEXT[],
+    heading_level   INT,
+    score           FLOAT,
+    doc_title       TEXT,
+    doc_source      TEXT,
     doc_project_ids UUID[],
-    doc_metadata   JSONB
+    doc_metadata    JSONB,
+    version_count   INT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
     query_fts tsquery := websearch_to_tsquery('english', p_query_text);
@@ -190,10 +216,13 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
-        d.metadata      AS doc_metadata
+        d.metadata      AS doc_metadata,
+        (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
+         WHERE dv.document_id = d.id) AS version_count
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
-    WHERE c.fts @@ query_fts
+    WHERE c.version_id IS NULL
+      AND c.fts @@ query_fts
       AND (p_project_id IS NULL OR EXISTS (
               SELECT 1 FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id AND dp.project_id = p_project_id
@@ -214,21 +243,23 @@ CREATE OR REPLACE FUNCTION cerefox_semantic_search(
     p_min_score       FLOAT   DEFAULT 0.0
 )
 RETURNS TABLE (
-    chunk_id       UUID,
-    document_id    UUID,
-    chunk_index    INT,
-    title          TEXT,
-    content        TEXT,
-    heading_path   TEXT[],
-    heading_level  INT,
-    score          FLOAT,
-    doc_title      TEXT,
-    doc_source     TEXT,
+    chunk_id        UUID,
+    document_id     UUID,
+    chunk_index     INT,
+    title           TEXT,
+    content         TEXT,
+    heading_path    TEXT[],
+    heading_level   INT,
+    score           FLOAT,
+    doc_title       TEXT,
+    doc_source      TEXT,
     doc_project_ids UUID[],
-    doc_metadata   JSONB
+    doc_metadata    JSONB,
+    version_count   INT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 BEGIN
     RETURN QUERY
@@ -250,10 +281,13 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
-        d.metadata      AS doc_metadata
+        d.metadata      AS doc_metadata,
+        (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
+         WHERE dv.document_id = d.id) AS version_count
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
-    WHERE (p_project_id IS NULL OR EXISTS (
+    WHERE c.version_id IS NULL
+      AND (p_project_id IS NULL OR EXISTS (
               SELECT 1 FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id AND dp.project_id = p_project_id
           ))
@@ -292,11 +326,13 @@ RETURNS TABLE (
     doc_project_ids UUID[],
     full_content    TEXT,
     chunk_count     INT,
-    total_chars     INT
+    total_chars     INT,
+    version_count   INT
 )
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
+SET search_path = public, pg_catalog
 AS $$
     SELECT
         d.id            AS document_id,
@@ -307,10 +343,13 @@ AS $$
               WHERE dp.document_id = d.id) AS doc_project_ids,
         STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
         COUNT(*)::INT   AS chunk_count,
-        SUM(c.char_count)::INT AS total_chars
+        SUM(c.char_count)::INT AS total_chars,
+        (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
+         WHERE dv.document_id = d.id) AS version_count
     FROM cerefox_documents d
     JOIN cerefox_chunks c ON c.document_id = d.id
     WHERE d.id = p_document_id
+      AND c.version_id IS NULL
     GROUP BY d.id, d.title, d.source, d.metadata;
 $$;
 
@@ -343,6 +382,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
     v_hash TEXT;
@@ -412,11 +452,13 @@ RETURNS TABLE (
     full_content             TEXT,
     chunk_count              INT,
     total_chars              INT,
-    doc_updated_at           TIMESTAMPTZ
+    doc_updated_at           TIMESTAMPTZ,
+    version_count            INT
 )
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
+SET search_path = public, pg_catalog
 AS $$
     WITH chunk_results AS (
         -- Run hybrid search with a 10x candidate pool so deduplication has
@@ -444,6 +486,7 @@ AS $$
             cr.doc_source,
             cr.doc_metadata,
             cr.doc_project_ids,
+            cr.version_count,
             d.updated_at       AS doc_updated_at
         FROM chunk_results cr
         JOIN cerefox_documents d ON d.id = cr.document_id
@@ -457,7 +500,7 @@ AS $$
         LIMIT p_match_count
     ),
     full_docs AS (
-        -- Reconstruct full content for each top document from its chunks.
+        -- Reconstruct full content for each top document from its current chunks.
         SELECT
             c.document_id,
             STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
@@ -465,6 +508,7 @@ AS $$
             SUM(c.char_count)::INT                                 AS total_chars
         FROM cerefox_chunks c
         WHERE c.document_id IN (SELECT document_id FROM top_docs)
+          AND c.version_id IS NULL
         GROUP BY c.document_id
     )
     SELECT
@@ -478,7 +522,8 @@ AS $$
         fd.full_content,
         fd.chunk_count,
         fd.total_chars,
-        td.doc_updated_at
+        td.doc_updated_at,
+        td.version_count
     FROM top_docs td
     JOIN full_docs fd ON fd.document_id = td.document_id
     ORDER BY td.best_score DESC;
@@ -514,17 +559,20 @@ RETURNS TABLE (
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
+SET search_path = public, pg_catalog
 AS $$
     WITH seeds AS (
         SELECT c.id, c.document_id, c.chunk_index
         FROM cerefox_chunks c
         WHERE c.id = ANY(p_chunk_ids)
+          AND c.version_id IS NULL
     ),
     expanded AS (
         SELECT DISTINCT c.id
         FROM cerefox_chunks c
         JOIN seeds s ON c.document_id = s.document_id
-        WHERE c.chunk_index BETWEEN s.chunk_index - p_window_size
+        WHERE c.version_id IS NULL
+          AND c.chunk_index BETWEEN s.chunk_index - p_window_size
                                 AND s.chunk_index + p_window_size
     )
     SELECT
@@ -548,6 +596,171 @@ $$;
 -- No registry table needed — always accurate, zero maintenance.
 -- Used by CLI, MCP tools, web UI autocomplete.
 
+-- ── cerefox_snapshot_version ──────────────────────────────────────────────────
+-- Archives all current chunks for a document (sets version_id to the new version
+-- row's UUID) and runs lazy retention cleanup.
+--
+-- Called by the Python pipeline's update_document() and by the TypeScript Edge
+-- Functions before inserting new chunks. This single RPC is the canonical way to
+-- create a version — do not split the chunk-archiving step into separate code.
+--
+-- Retention policy (p_retention_hours):
+--   - Always keeps the most recently created version (accidental-deletion protection)
+--   - Also keeps all versions created within the retention window
+--   - Deletes older versions beyond the window (cascade removes their chunks)
+--
+-- Parameters:
+--   p_document_id     : Document to snapshot
+--   p_source          : How the update was triggered ('file','paste','agent','manual')
+--   p_retention_hours : Retention window in hours (default: 48)
+--
+-- Returns: (version_id, version_number, chunk_count, total_chars) of the new version
+
+DROP FUNCTION IF EXISTS cerefox_snapshot_version(UUID, TEXT, INT);
+CREATE FUNCTION cerefox_snapshot_version(
+    p_document_id     UUID,
+    p_source          TEXT  DEFAULT 'manual',
+    p_retention_hours INT   DEFAULT 48
+)
+RETURNS TABLE (
+    version_id     UUID,
+    version_number INT,
+    chunk_count    INT,
+    total_chars    INT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_version_id     UUID;
+    v_version_number INT;
+    v_chunk_count    INT;
+    v_total_chars    INT;
+BEGIN
+    -- Count current chunks to record in the version metadata
+    SELECT COUNT(*), COALESCE(SUM(char_count), 0)
+    INTO v_chunk_count, v_total_chars
+    FROM cerefox_chunks c
+    WHERE c.document_id = p_document_id
+      AND c.version_id IS NULL;
+
+    -- Compute the next version number (sequential per document)
+    SELECT COALESCE(MAX(dv.version_number), 0) + 1
+    INTO v_version_number
+    FROM cerefox_document_versions dv
+    WHERE dv.document_id = p_document_id;
+
+    -- Create the version row
+    INSERT INTO cerefox_document_versions (
+        document_id, version_number, source, chunk_count, total_chars
+    ) VALUES (
+        p_document_id, v_version_number, p_source, v_chunk_count, v_total_chars
+    )
+    RETURNING id INTO v_version_id;
+
+    -- Archive all current chunks by pointing them at the new version
+    UPDATE cerefox_chunks c
+    SET version_id = v_version_id
+    WHERE c.document_id = p_document_id
+      AND c.version_id IS NULL;
+
+    -- Lazy retention: delete versions outside the retention window,
+    -- but always keep the most recently created version (the one we just made).
+    DELETE FROM cerefox_document_versions dv
+    WHERE dv.document_id = p_document_id
+      AND dv.created_at < NOW() - (p_retention_hours || ' hours')::INTERVAL
+      AND dv.id != (
+          SELECT id FROM cerefox_document_versions
+          WHERE document_id = p_document_id
+          ORDER BY created_at DESC
+          LIMIT 1
+      );
+
+    RETURN QUERY SELECT v_version_id, v_version_number, v_chunk_count, v_total_chars;
+END;
+$$;
+
+-- ── cerefox_get_document ──────────────────────────────────────────────────────
+-- Returns the full content of a document by reconstructing it from chunks.
+-- Pass p_version_id = NULL (or omit it) for the current version.
+-- Pass a specific version UUID to retrieve an archived version.
+-- Version UUIDs are returned by cerefox_list_document_versions.
+
+DROP FUNCTION IF EXISTS cerefox_get_document(UUID, UUID);
+CREATE FUNCTION cerefox_get_document(
+    p_document_id UUID,
+    p_version_id  UUID DEFAULT NULL
+)
+RETURNS TABLE (
+    document_id  UUID,
+    doc_title    TEXT,
+    doc_source   TEXT,
+    doc_metadata JSONB,
+    version_id   UUID,
+    full_content TEXT,
+    chunk_count  INT,
+    total_chars  INT,
+    created_at   TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT
+        d.id            AS document_id,
+        d.title         AS doc_title,
+        d.source        AS doc_source,
+        d.metadata      AS doc_metadata,
+        p_version_id    AS version_id,
+        STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
+        COUNT(*)::INT   AS chunk_count,
+        SUM(c.char_count)::INT AS total_chars,
+        d.created_at
+    FROM cerefox_documents d
+    JOIN cerefox_chunks c ON c.document_id = d.id
+    WHERE d.id = p_document_id
+      AND (
+          (p_version_id IS NULL     AND c.version_id IS NULL) OR
+          (p_version_id IS NOT NULL AND c.version_id = p_version_id)
+      )
+    GROUP BY d.id, d.title, d.source, d.metadata, d.created_at;
+$$;
+
+-- ── cerefox_list_document_versions ────────────────────────────────────────────
+-- Returns all archived versions for a document, newest first.
+-- version_id is the UUID to pass to cerefox_get_document for retrieval.
+-- version_number is the sequential human-readable number (unique per document).
+
+DROP FUNCTION IF EXISTS cerefox_list_document_versions(UUID);
+CREATE FUNCTION cerefox_list_document_versions(
+    p_document_id UUID
+)
+RETURNS TABLE (
+    version_id     UUID,
+    version_number INT,
+    source         TEXT,
+    chunk_count    INT,
+    total_chars    INT,
+    created_at     TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT id, version_number, source, chunk_count, total_chars, created_at
+    FROM cerefox_document_versions
+    WHERE document_id = p_document_id
+    ORDER BY created_at DESC;
+$$;
+
+-- ── Metadata key discovery RPC ───────────────────────────────────────────────
+-- Derives metadata keys from actual document data (metadata JSONB column).
+-- No registry table needed — always accurate, zero maintenance.
+-- Used by CLI, MCP tools, web UI autocomplete.
+
 DROP FUNCTION IF EXISTS cerefox_list_metadata_keys();
 CREATE FUNCTION cerefox_list_metadata_keys()
 RETURNS TABLE (
@@ -558,6 +771,7 @@ RETURNS TABLE (
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
+SET search_path = public, pg_catalog
 AS $$
     SELECT
         k.key,

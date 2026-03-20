@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS cerefox_projects (
 -- ── Documents ─────────────────────────────────────────────────────────────────
 -- One row per ingested document (markdown file, paste, agent write-back, etc.)
 -- Project assignment lives in the cerefox_document_projects junction table.
+-- Full content lives exclusively in cerefox_chunks — there is no content column here.
 
 CREATE TABLE IF NOT EXISTS cerefox_documents (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -41,6 +42,30 @@ CREATE TABLE IF NOT EXISTS cerefox_documents (
     CONSTRAINT cerefox_documents_hash_unique UNIQUE (content_hash)
 );
 
+-- ── Document versions ──────────────────────────────────────────────────────────
+-- One row per archived version of a document. Created automatically before each
+-- content update (accidental-deletion protection).
+--
+-- Versions do NOT store a content snapshot — full content is reconstructed from
+-- cerefox_chunks WHERE version_id = <this version's id>.
+--
+-- version_number is sequential per document (1, 2, 3 …), unique per document.
+-- Cascade delete: deleting a document removes all its versions, which cascades
+-- further to any chunks archived under those versions.
+
+CREATE TABLE IF NOT EXISTS cerefox_document_versions (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id     UUID        NOT NULL REFERENCES cerefox_documents(id) ON DELETE CASCADE,
+    version_number  INT         NOT NULL,
+    source          TEXT        NOT NULL DEFAULT 'manual',
+    -- Stats snapshotted at archive time (chunk_count and total_chars of the archived content)
+    chunk_count     INT         NOT NULL DEFAULT 0,
+    total_chars     INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT cerefox_document_versions_doc_num_unique UNIQUE (document_id, version_number)
+);
+
 -- ── Document ↔ Project junction ───────────────────────────────────────────────
 -- Many-to-many: one document can belong to zero or more projects.
 
@@ -52,10 +77,21 @@ CREATE TABLE IF NOT EXISTS cerefox_document_projects (
 
 -- ── Chunks ────────────────────────────────────────────────────────────────────
 -- One row per chunk of a document. Embeddings and FTS live here.
+--
+-- version_id discriminates between current and archived chunks:
+--   NULL         → current version (searchable, indexed by HNSW and GIN)
+--   non-NULL     → archived under that version (excluded from search indexes,
+--                  lazily deleted with their parent version row)
+--
+-- When a document is updated, all current chunks (version_id IS NULL) are
+-- archived by setting version_id to the new version row's UUID. New chunks are
+-- then inserted with version_id = NULL.
 
 CREATE TABLE IF NOT EXISTS cerefox_chunks (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     document_id     UUID        NOT NULL REFERENCES cerefox_documents(id) ON DELETE CASCADE,
+    -- version_id: NULL = current; non-NULL = archived under this version
+    version_id      UUID        REFERENCES cerefox_document_versions(id) ON DELETE CASCADE,
     chunk_index     INT         NOT NULL,
     -- heading_path: the heading hierarchy at this chunk, e.g. ARRAY['Overview', 'Architecture']
     heading_path    TEXT[]      NOT NULL DEFAULT '{}',
@@ -81,9 +117,9 @@ CREATE TABLE IF NOT EXISTS cerefox_chunks (
     ) STORED,
 
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT cerefox_chunks_doc_idx_unique UNIQUE (document_id, chunk_index)
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    -- NOTE: no UNIQUE (document_id, chunk_index) table constraint here.
+    -- Uniqueness of current chunks is enforced by the partial index below.
 );
 
 -- ── Migration tracking ────────────────────────────────────────────────────────
@@ -97,23 +133,34 @@ CREATE TABLE IF NOT EXISTS cerefox_migrations (
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 
--- Full-text search
+-- Full-text search — current chunks only (WHERE version_id IS NULL)
 CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_fts
-    ON cerefox_chunks USING GIN(fts);
+    ON cerefox_chunks USING GIN(fts)
+    WHERE version_id IS NULL;
 
--- Vector similarity — primary embedding (HNSW for fast ANN search)
+-- Vector similarity — primary embedding, current chunks only
 CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_emb_primary
     ON cerefox_chunks USING hnsw (embedding_primary vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+    WITH (m = 16, ef_construction = 64)
+    WHERE version_id IS NULL;
 
--- Vector similarity — upgrade embedding (only created, not always used)
+-- Vector similarity — upgrade embedding, current chunks only
 CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_emb_upgrade
     ON cerefox_chunks USING hnsw (embedding_upgrade vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+    WITH (m = 16, ef_construction = 64)
+    WHERE version_id IS NULL;
 
--- Document lookup by chunk
-CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_document
-    ON cerefox_chunks(document_id, chunk_index);
+-- Partial unique index: enforces (document_id, chunk_index) uniqueness for
+-- current chunks. Archived chunks are excluded and may share chunk_index values
+-- across versions for the same document.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cerefox_chunks_current_unique
+    ON cerefox_chunks(document_id, chunk_index)
+    WHERE version_id IS NULL;
+
+-- Archived chunk lookup — ordered retrieval of chunks for a specific version
+CREATE INDEX IF NOT EXISTS idx_cerefox_chunks_version
+    ON cerefox_chunks(version_id, chunk_index)
+    WHERE version_id IS NOT NULL;
 
 -- Document metadata (JSONB) — enables fast filtering by tags, source, etc.
 CREATE INDEX IF NOT EXISTS idx_cerefox_docs_metadata
@@ -130,15 +177,22 @@ CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_doc
 CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_project
     ON cerefox_document_projects(project_id);
 
+-- Document versions lookup — find all versions for a document, ordered by date
+CREATE INDEX IF NOT EXISTS idx_cerefox_document_versions_doc
+    ON cerefox_document_versions(document_id, created_at DESC);
+
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 
 CREATE OR REPLACE FUNCTION cerefox_set_updated_at()
-RETURNS TRIGGER AS $$
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_catalog
+AS $$
 BEGIN
     NEW.updated_at = NOW();
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$;
 
 CREATE OR REPLACE TRIGGER trig_cerefox_projects_updated
     BEFORE UPDATE ON cerefox_projects
@@ -180,3 +234,21 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- ── Row Level Security ────────────────────────────────────────────────────────
+-- Enable RLS on all tables. No permissive policies are added: direct table
+-- access via the anon key (PostgREST) is denied by default.
+--
+-- This does NOT affect the Python application or Edge Functions, which use the
+-- service role key (bypasses RLS unconditionally). All search and write
+-- operations go through SECURITY DEFINER RPCs (rpcs.sql), which run as the
+-- function owner (postgres superuser) and also bypass RLS.
+--
+-- Safe to re-run — ALTER TABLE ... ENABLE ROW LEVEL SECURITY is idempotent.
+
+ALTER TABLE cerefox_projects              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_documents             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_chunks                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_document_projects     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_document_versions     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_migrations            ENABLE ROW LEVEL SECURITY;

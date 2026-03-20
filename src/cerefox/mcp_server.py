@@ -167,6 +167,50 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {},
             },
         ),
+        types.Tool(
+            name="cerefox_get_document",
+            description=(
+                "Retrieve the full content of a specific document by its ID. "
+                "Optionally specify a version_id to retrieve an archived (previous) version. "
+                "Use cerefox_list_versions first to see available versions. "
+                "When search results show version_count > 0, the document has previous versions."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["document_id"],
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "UUID of the document to retrieve",
+                    },
+                    "version_id": {
+                        "type": "string",
+                        "description": (
+                            "Optional UUID of an archived version. "
+                            "Omit to get the current version."
+                        ),
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="cerefox_list_versions",
+            description=(
+                "List all archived versions of a document. "
+                "Returns version_number, version_id, source, size, and timestamp for each version. "
+                "Pass version_id to cerefox_get_document to retrieve a specific version's content."
+            ),
+            inputSchema={
+                "type": "object",
+                "required": ["document_id"],
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "UUID of the document",
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -187,6 +231,10 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return await _handle_ingest(client, pipeline, arguments)
     elif name == "cerefox_list_metadata_keys":
         return await _handle_list_metadata_keys(client)
+    elif name == "cerefox_get_document":
+        return await _handle_get_document(client, arguments)
+    elif name == "cerefox_list_versions":
+        return await _handle_list_versions(client, arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -288,6 +336,41 @@ async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[ty
             msg += f"\nProject IDs: {', '.join(result.project_ids)}"
 
     return [types.TextContent(type="text", text=msg)]
+
+
+async def _handle_get_document(client: Any, arguments: dict) -> list[types.TextContent]:
+    document_id = arguments.get("document_id", "")
+    version_id = arguments.get("version_id")
+    if not document_id:
+        return [types.TextContent(type="text", text="Error: document_id is required.")]
+    doc = client.get_document_content(document_id, version_id=version_id)
+    if doc is None:
+        label = f" (version {version_id})" if version_id else ""
+        return [types.TextContent(type="text", text=f"Document{label} not found: {document_id}")]
+    lines = [
+        f"# {doc.get('doc_title', 'Untitled')}",
+        f"source: {doc.get('doc_source', '')} | "
+        f"chunks: {doc.get('chunk_count', 0)} | chars: {doc.get('total_chars', 0)}",
+        "",
+        doc.get("full_content") or "",
+    ]
+    return [types.TextContent(type="text", text="\n".join(lines))]
+
+
+async def _handle_list_versions(client: Any, arguments: dict) -> list[types.TextContent]:
+    document_id = arguments.get("document_id", "")
+    if not document_id:
+        return [types.TextContent(type="text", text="Error: document_id is required.")]
+    versions = client.list_document_versions(document_id)
+    if not versions:
+        return [types.TextContent(type="text", text="No archived versions found for this document.")]
+    lines = [f"Versions for document {document_id}:", ""]
+    for v in versions:
+        lines.append(
+            f"  v{v['version_number']} — {v['created_at']} | source: {v['source']} | "
+            f"{v['chunk_count']} chunks | {v['total_chars']} chars | id: {v['version_id']}"
+        )
+    return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 async def _handle_list_metadata_keys(client: Any) -> list[types.TextContent]:

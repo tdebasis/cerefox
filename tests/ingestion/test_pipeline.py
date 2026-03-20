@@ -200,6 +200,24 @@ class TestIngestText:
         mock_client.insert_document.assert_called_once()
         assert result.chunk_count == 0
 
+    def test_paste_without_source_path_derives_slug(self, pipeline, mock_client) -> None:
+        """Paste ingestion with no source_path should store a slugified filename derived from title."""
+        pipeline.ingest_text("# My Research Notes\n\nContent.", title="My Research Notes")
+        doc_kwargs = mock_client.insert_document.call_args[0][0]
+        assert doc_kwargs["source_path"] == "my-research-notes.md"
+
+    def test_paste_slug_strips_special_chars(self, pipeline, mock_client) -> None:
+        """Special characters are removed from the slug; spaces become hyphens."""
+        pipeline.ingest_text("# Hello, World! 2026\n\nContent.", title="Hello, World! 2026")
+        doc_kwargs = mock_client.insert_document.call_args[0][0]
+        assert doc_kwargs["source_path"] == "hello-world-2026.md"
+
+    def test_explicit_source_path_is_not_overridden(self, pipeline, mock_client) -> None:
+        """When source_path is provided explicitly, it must not be replaced with a slug."""
+        pipeline.ingest_text("# T\n\nB.", title="T", source_path="custom/path.md")
+        doc_kwargs = mock_client.insert_document.call_args[0][0]
+        assert doc_kwargs["source_path"] == "custom/path.md"
+
 
 # ── M2M project_ids ───────────────────────────────────────────────────────────
 
@@ -369,6 +387,9 @@ class TestUpdateDocument:
         mock_client.get_document_by_hash.return_value = None  # no collision
         mock_client.update_document.return_value = {**existing_doc, "title": "New Title"}
         mock_client.get_document_project_ids.return_value = []
+        mock_client.snapshot_version.return_value = {
+            "version_id": "ver-001", "version_number": 1, "chunk_count": 2, "total_chars": 100
+        }
         mock_embedder.embed_batch.return_value = [[0.1] * 768]
 
         result = pipeline.update_document("doc-001", "# New Title\n\nNew body.", "New Title")
@@ -378,7 +399,11 @@ class TestUpdateDocument:
         assert result.action == "updated"
         assert result.reindexed is True
         assert not result.skipped  # back-compat property
-        mock_client.delete_chunks_for_document.assert_called_once_with("doc-001")
+        # snapshot_version archives current chunks; delete_chunks_for_document is NOT called
+        mock_client.snapshot_version.assert_called_once_with(
+            "doc-001", source="manual", retention_hours=48
+        )
+        mock_client.delete_chunks_for_document.assert_not_called()
         mock_client.update_document.assert_called_once()
         mock_client.insert_chunks.assert_called_once()
 
@@ -485,8 +510,8 @@ class TestUpdateDocument:
         with pytest.raises(RuntimeError, match="GPU OOM"):
             pipeline.update_document("doc-001", "# T\n\nBody.", "T")
 
-        # DB should NOT have been touched
-        mock_client.delete_chunks_for_document.assert_not_called()
+        # DB should NOT have been touched (embed happens before any DB write)
+        mock_client.snapshot_version.assert_not_called()
         mock_client.update_document.assert_not_called()
 
 

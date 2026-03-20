@@ -75,13 +75,19 @@ class TestListTools:
     @pytest.mark.asyncio
     async def test_returns_three_tools(self) -> None:
         tools = await list_tools()
-        assert len(tools) == 3
+        assert len(tools) == 5
 
     @pytest.mark.asyncio
     async def test_tool_names(self) -> None:
         tools = await list_tools()
         names = {t.name for t in tools}
-        assert names == {"cerefox_search", "cerefox_ingest", "cerefox_list_metadata_keys"}
+        assert names == {
+            "cerefox_search",
+            "cerefox_ingest",
+            "cerefox_list_metadata_keys",
+            "cerefox_get_document",
+            "cerefox_list_versions",
+        }
 
     @pytest.mark.asyncio
     async def test_search_tool_has_required_query_param(self) -> None:

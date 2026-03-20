@@ -19,10 +19,6 @@
 - [x] OpenAI embedder — `CloudEmbedder` (Iteration 8, default)
 - [x] Fireworks AI embedder — same class, different base_url/model (Iteration 8)
 - [x] Embedding migration tool — `cerefox reindex` re-embeds all chunks in-place (Iteration 8)
-- [ ] **Edge Function model config via Supabase secrets** — `OPENAI_MODEL` and
-  `EMBEDDING_DIMENSIONS` are currently hardcoded as TypeScript constants. Move them to
-  Supabase secrets so changing the model only requires updating `.env` + `cerefox reindex`,
-  without editing TypeScript or redeploying functions.
 - [ ] Vertex AI text-embedding-005 embedder (add as another cloud provider)
 - [ ] Benchmark: compare retrieval quality across OpenAI vs Fireworks embedders on real data
 - [ ] Matryoshka/PCA dimensionality reduction for models that don't output 768-dim
@@ -62,7 +58,7 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 
 ### Web UI
 - [ ] Pagination for document lists — Browse project view (`/search?project_id=X` with no query) currently caps at 100 docs; add page controls or infinite-scroll when project grows large
-- [ ] Metadata entry on ingest form (key/value editor or raw JSON textarea) — CLI supports --metadata already, web UI doesn't expose it
+- [x] Metadata entry on ingest form — dynamic key/value editor with `<datalist>` autocomplete from `cerefox_list_metadata_keys` (Iteration 9)
 - [ ] ~~Collapse "Full content" section~~ — done: HTMX Show/Hide button, same pattern as Chunks
 - [ ] **"No Project Assigned" dashboard tile** — show a virtual tile in the Projects section for documents not in any project (no row in `cerefox_document_projects`). Needs:
   - `client.get_unassigned_doc_count()` → single query: `SELECT COUNT(*) FROM cerefox_documents d WHERE NOT EXISTS (SELECT 1 FROM cerefox_document_projects dp WHERE dp.document_id = d.id)`
@@ -83,7 +79,7 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] Rate limiting on API endpoints
 - [ ] Health check endpoint
 - [ ] Usage statistics (docs stored, searches performed, storage used)
-- [ ] Database migration tool (for schema evolution)
+- [x] Database migration tool (for schema evolution) — `scripts/db_migrate.py` with `--dry-run`, `--status` flags (Iteration 12)
 - [ ] CI/CD pipeline (GitHub Actions: lint, test, build)
 - [ ] **Local integration test suite** — `@pytest.mark.integration_local` tests that run against
   Supabase local stack (`supabase start`); covers schema deploy, ingest, search, Edge Functions
@@ -100,7 +96,7 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] Scheduled automatic backups
 - [ ] Backup verification (compare DB state with backup)
 - [ ] Export knowledge base as a zip of markdown files
-- [ ] Import from backup (restore)
+- [x] Import from backup (restore) — `scripts/backup_restore.py` with `--dry-run` (Iteration 12)
 - [ ] Sync between local Postgres and Supabase
 
 ### MCP & Agent Integration
@@ -116,8 +112,10 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [x] **`cerefox-mcp` Edge Function — universal remote MCP endpoint** (P1)
   MCP Streamable HTTP transport as a Supabase Edge Function. A single
   `https://<project>.supabase.co/functions/v1/cerefox-mcp` URL serves all remote-capable
-  clients with no extra hosting cost (Supabase free tier). Thin protocol adapter over
-  `cerefox-search` and `cerefox-ingest`. Auth via Supabase anon key Bearer token.
+  clients with no extra hosting cost (Supabase free tier). Thin protocol adapter — delegates
+  all 5 tool calls via internal fetch to dedicated Edge Functions
+  (`cerefox-search`, `cerefox-ingest`, `cerefox-metadata`, `cerefox-get-document`,
+  `cerefox-list-versions`). Auth via Supabase anon key Bearer token.
 
   **Client compatibility (tested):**
   | Client | How to connect | Status |
@@ -135,10 +133,11 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] **OpenClaw** integration — OpenClaw (open-source AI agent) MCP config; same Path A
   approach as Cursor/Claude Code; track once the tool matures.
 - [ ] Usage analytics (which tools agents call most, common query patterns)
-- [ ] Perplexity — custom connector MCP support exists (Streamable HTTP + SSE + API Key/OAuth
-  auth). Web-based connector fails to reach Supabase Edge Functions — likely due to GoTrue
-  OAuth discovery conflict (same root cause as `mcp-remote`). Scheduled for Iteration 11:
-  investigate Supabase OAuth 2.1 (11.17) + test web & desktop connectivity (11.18).
+- [ ] Perplexity — web connector CONFIRMED broken (Iteration 11 testing): GoTrue OAuth
+  discovery conflict prevents reaching Supabase Edge Functions. Desktop app + Helper App path
+  (local stdio MCP) is untested but likely works. Low priority: Perplexity CTO announced
+  moving away from MCP (March 2026) in favor of traditional APIs. Sonar API / Agent API are
+  alternative programmatic paths. See `docs/research/oauth-mcp-auth.md` §8 for full analysis.
 
 ---
 
@@ -189,3 +188,6 @@ Record important decisions here for future reference.
 | 2026-03-15 | `supergateway` replaces `mcp-remote` for Claude Desktop remote MCP | `mcp-remote` 0.1.x proactively discovers Supabase GoTrue OAuth at the root domain and crashes at dynamic client registration. `supergateway` connects directly via Streamable HTTP without OAuth. |
 | 2026-03-15 | Remove custom auth check from `cerefox-mcp`; forward caller's Authorization header | Supabase API gateway validates JWT; custom `SUPABASE_ANON_KEY` comparison was redundant and broken (env var not reliably available). Internal Edge Function calls now use the forwarded caller token. |
 | 2026-03-15 | Remote MCP (Path A-Remote) is the recommended default; local stdio MCP is legacy fallback | Remote path requires only URL + anon key + npx; no Python, no repo clone. Local path retained for offline use and development. |
+| 2026-03-19 | Chunks-anchored versioning: version_id IS NULL = current, non-NULL = archived | No separate content table; single retrieval path; partial indexes automatically exclude archived chunks from search |
+| 2026-03-19 | Edge Function = thin HTTP adapter over Postgres RPC (single implementation principle) | Logic in SQL RPCs; Python + TypeScript call the same RPCs; cerefox-mcp delegates to dedicated Edge Functions via fetch |
+| 2026-03-19 | Source path derived and stored at ingestion time (paste docs get slug-based path) | Download route uses source_path directly; no extension guessing; always correct filename |

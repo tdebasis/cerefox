@@ -160,12 +160,16 @@ class CerefoxClient:
             raise RuntimeError(f"delete_document failed: {exc}") from exc
 
     def delete_chunks_for_document(self, document_id: str) -> None:
-        """Delete all chunks for a document without deleting the document itself.
+        """Delete all current chunks for a document without deleting the document itself.
 
-        Used by update_document to clear old chunks before re-ingesting.
+        Used by delete_document cascade and direct chunk cleanup. Since update_document
+        now archives chunks via the cerefox_snapshot_version RPC, this method is only
+        used when permanently removing a document's current chunks (e.g., full deletion).
         """
         try:
-            self.client.table("cerefox_chunks").delete().eq("document_id", document_id).execute()
+            self.client.table("cerefox_chunks").delete().eq(
+                "document_id", document_id
+            ).is_("version_id", "null").execute()
         except Exception as exc:
             logger.error("delete_chunks_for_document failed: %s", exc)
             raise RuntimeError(f"delete_chunks_for_document failed: {exc}") from exc
@@ -197,7 +201,7 @@ class CerefoxClient:
             query = (
                 self.client.table("cerefox_documents")
                 .select(
-                    "id, title, source, source_path, metadata, chunk_count, total_chars, created_at, updated_at"
+                    "id, title, source, source_path, content_hash, metadata, chunk_count, total_chars, created_at, updated_at"
                 )
                 .order("updated_at", desc=True)
             )
@@ -217,6 +221,34 @@ class CerefoxClient:
         except Exception as exc:
             logger.error("list_documents failed: %s", exc)
             raise RuntimeError(f"list_documents failed: {exc}") from exc
+
+    def list_all_documents(self, batch_size: int = 200) -> list[dict[str, Any]]:
+        """Return every document, paginating internally to avoid the default limit.
+
+        Used by backup to ensure no documents are silently omitted.
+        """
+        results: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            try:
+                page = (
+                    self.client.table("cerefox_documents")
+                    .select(
+                        "id, title, source, source_path, content_hash, metadata, "
+                        "chunk_count, total_chars, created_at, updated_at"
+                    )
+                    .order("created_at")
+                    .range(offset, offset + batch_size - 1)
+                    .execute()
+                ).data or []
+                results.extend(page)
+                if len(page) < batch_size:
+                    break
+                offset += batch_size
+            except Exception as exc:
+                logger.error("list_all_documents failed at offset %d: %s", offset, exc)
+                raise RuntimeError(f"list_all_documents failed: {exc}") from exc
+        return results
 
     # ── Document ↔ Project (M2M) ───────────────────────────────────────────────
 
@@ -318,15 +350,18 @@ class CerefoxClient:
             raise RuntimeError(f"insert_chunks failed: {exc}") from exc
 
     def list_chunks_for_document(self, document_id: str) -> list[dict[str, Any]]:
-        """Return all chunks for a document, ordered by chunk_index."""
+        """Return current chunks for a document (version_id IS NULL), ordered by chunk_index."""
         try:
             response = (
                 self.client.table("cerefox_chunks")
                 .select(
                     "id, document_id, chunk_index, heading_path, heading_level, "
-                    "title, content, char_count, embedder_primary, created_at"
+                    "title, content, char_count, "
+                    "embedding_primary, embedding_upgrade, embedder_primary, embedder_upgrade, "
+                    "created_at"
                 )
                 .eq("document_id", document_id)
+                .is_("version_id", "null")
                 .order("chunk_index")
                 .execute()
             )
@@ -340,9 +375,10 @@ class CerefoxClient:
         embedder_not: str | None = None,
         batch_size: int = 200,
     ) -> list[dict[str, Any]]:
-        """Return all chunks, optionally excluding those already embedded by a given model.
+        """Return all current chunks (version_id IS NULL), optionally filtered by embedder.
 
-        Used by ``cerefox reindex`` to find chunks that need re-embedding.
+        Used by ``cerefox reindex`` to find current chunks that need re-embedding.
+        Archived chunks are excluded — they retain their original embeddings.
 
         Args:
             embedder_not: If set, exclude chunks where ``embedder_primary`` equals
@@ -356,6 +392,7 @@ class CerefoxClient:
                 query = (
                     self.client.table("cerefox_chunks")
                     .select("id, document_id, content, embedder_primary")
+                    .is_("version_id", "null")
                     .order("id")
                     .range(offset, offset + batch_size - 1)
                 )
@@ -385,6 +422,71 @@ class CerefoxClient:
         except Exception as exc:
             logger.error("update_chunk_embedding failed for chunk %s: %s", chunk_id, exc)
             raise RuntimeError(f"update_chunk_embedding failed: {exc}") from exc
+
+    # ── Document versions ───────────────────────────────────────────────────────
+
+    def snapshot_version(
+        self,
+        document_id: str,
+        source: str = "manual",
+        retention_hours: int = 48,
+    ) -> dict[str, Any]:
+        """Archive current chunks and create a version record via RPC.
+
+        Calls cerefox_snapshot_version which atomically:
+        1. Creates a version row in cerefox_document_versions.
+        2. Sets version_id on all current chunks (marking them as archived).
+        3. Deletes versions older than retention_hours (always keeps the newest).
+
+        Returns a dict with version_id, version_number, chunk_count, total_chars.
+        """
+        rows = self.rpc(
+            "cerefox_snapshot_version",
+            {
+                "p_document_id": document_id,
+                "p_source": source,
+                "p_retention_hours": retention_hours,
+            },
+        )
+        if not rows:
+            raise RuntimeError("cerefox_snapshot_version returned no data")
+        return rows[0]
+
+    def get_document_content(
+        self,
+        document_id: str,
+        version_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return full reconstructed content of a document (current or archived version).
+
+        Args:
+            document_id: UUID of the document.
+            version_id: UUID of an archived version, or None for the current version.
+
+        Returns:
+            Dict with document_id, doc_title, doc_source, doc_metadata, version_id,
+            full_content, chunk_count, total_chars, created_at — or None if not found.
+        """
+        rows = self.rpc(
+            "cerefox_get_document",
+            {
+                "p_document_id": document_id,
+                "p_version_id": version_id,
+            },
+        )
+        return rows[0] if rows else None
+
+    def list_document_versions(self, document_id: str) -> list[dict[str, Any]]:
+        """Return all archived versions for a document, newest first.
+
+        Each row contains version_id, version_number, source, chunk_count,
+        total_chars, created_at.  Pass version_id to get_document_content()
+        to retrieve the full content of a specific version.
+        """
+        return self.rpc(
+            "cerefox_list_document_versions",
+            {"p_document_id": document_id},
+        )
 
     # ── Projects ───────────────────────────────────────────────────────────────
 

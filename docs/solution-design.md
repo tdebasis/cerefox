@@ -20,7 +20,7 @@ The web UI covers management (browse, metadata, projects) and ingestion (upload,
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        AI Agents                                │
-│  Claude ─ Cursor ─ ChatGPT ─ Custom Agents ─ OpenClaw          │
+│  Claude ─ Cursor ─ ChatGPT ─ Custom Agents                      │
 │                          │                                      │
 │                     MCP Protocol                                │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -36,10 +36,15 @@ The web UI covers management (browse, metadata, projects) and ingestion (upload,
 │  ┌─────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
 │  │cerefox_documents│  │  cerefox_chunks   │  │cerefox_projects│ │
 │  │  (doc metadata) │──│  (content+embeds) │  │  (categories) │  │
-│  └─────────────────┘  └──────────────────┘  └───────────────┘  │
+│  └────────┬────────┘  └──────────────────┘  └───────────────┘  │
+│           │                                                      │
+│  ┌────────▼──────────────┐                                      │
+│  │cerefox_document_vers. │                                      │
+│  │  (content snapshots)  │                                      │
+│  └───────────────────────┘                                      │
 │                                                                  │
 │  RPCs: hybrid_search ─ fts_search ─ semantic_search             │
-│        reconstruct_doc ─ expand_context                          │
+│        get_document ─ list_versions                              │
 └─────────────────────────────────────────────────────────────────┘
                            ▲
                            │
@@ -54,20 +59,29 @@ The web UI covers management (browse, metadata, projects) and ingestion (upload,
 │       └───────────────┴──────────────┴────────────────┘         │
 │                           │                                      │
 │                   Ingestion Pipeline                             │
-│            (parse → chunk → embed → store)                      │
+│            (parse → version → chunk → embed → store)            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## 2. Data Model
 
-### 2.1 Design Rationale: Two-Table Schema
+### 2.1 Design Rationale: Chunks-Anchored Versioning
 
-The original spec used a single `cerefox_notes` table. This design splits into **documents** and **chunks** for several reasons:
+The original spec used a single `cerefox_notes` table. The current design uses:
 
-- **Document lifecycle**: delete/update a whole document cleanly (cascade deletes its chunks)
-- **Small-to-big retrieval**: find a chunk, then efficiently pull its siblings
+- **`cerefox_documents`** — document-level metadata (no content column — content lives in chunks)
+- **`cerefox_chunks`** — search corpus and version store. Current chunks have `version_id IS NULL`; archived chunks have `version_id` pointing to their version row. All embeddings and FTS live here.
+- **`cerefox_document_versions`** — lightweight version metadata rows. No content TEXT — content for any version is reconstructed from its archived chunks. Created only when content actually changes.
+
+Key design properties:
+- **Document lifecycle**: delete/update a whole document cleanly (cascade deletes its chunks and versions)
+- **Chunks-first**: content is always authoritative in chunks, never duplicated in the documents table
+- **Unified version store**: current and archived content share the same table — no separate content column, no redundant storage
+- **Search isolation**: all search RPCs filter `version_id IS NULL` so only current chunks are searchable
+- **Small-to-big retrieval**: find a current chunk, then pull its current siblings by chunk_index
 - **Document-level metadata**: tags, project, source — live on the document, not duplicated per chunk
 - **Deduplication**: content hash on documents prevents re-ingesting the same file
+- **Versioning is additive**: the search path (documents → current chunks) is unchanged; archived chunks are invisible to search
 
 ### 2.2 Schema
 
@@ -90,18 +104,18 @@ Projects are entirely user-defined with no predefined taxonomy.
 
 #### cerefox_documents
 
-One row per ingested document (markdown file, pasted note, etc.).
+One row per ingested document (markdown file, pasted note, etc.). No `content` column — content lives in `cerefox_chunks`. The `content_hash` covers the full markdown content and is used for deduplication.
 
 ```sql
 CREATE TABLE cerefox_documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   title TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'manual',     -- 'file', 'paste', 'agent', 'url', 'manual'
-  source_path TEXT,                           -- original file path or URL
-  content_hash TEXT NOT NULL,                 -- SHA-256 of raw content for dedup
+  source TEXT NOT NULL DEFAULT 'manual',      -- 'file', 'paste', 'agent', 'url', 'manual'
+  source_path TEXT,                            -- original file path or URL
+  content_hash TEXT NOT NULL,                  -- SHA-256 of raw markdown; used for dedup
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  chunk_count INT NOT NULL DEFAULT 0,
-  total_chars INT NOT NULL DEFAULT 0,
+  chunk_count INT NOT NULL DEFAULT 0,          -- count of current-version chunks (version_id IS NULL)
+  total_chars INT NOT NULL DEFAULT 0,          -- sum of char_count for current-version chunks
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -118,24 +132,31 @@ CREATE TABLE cerefox_document_projects (
 
 #### cerefox_chunks
 
-One row per chunk of a document. This is where embeddings and FTS live.
+One row per chunk, for both the current and all archived versions. Current chunks have `version_id IS NULL`; archived chunks have `version_id` pointing to their `cerefox_document_versions` row.
+
+Chunks are **never updated in place** and are **never deleted on a document update**. On update, current chunks are archived (their `version_id` is set to the new version row's id) and new current chunks are inserted (`version_id IS NULL`). Archived chunks are deleted lazily when their version expires.
 
 ```sql
 CREATE TABLE cerefox_chunks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   document_id UUID NOT NULL REFERENCES cerefox_documents(id) ON DELETE CASCADE,
+  -- version_id IS NULL  → current version (searchable, indexed)
+  -- version_id non-NULL → archived version (not searchable, retained until version cleanup)
+  version_id  UUID REFERENCES cerefox_document_versions(id) ON DELETE CASCADE,
   chunk_index INT NOT NULL,
-  heading_path TEXT[],                        -- e.g., ARRAY['Overview', 'Architecture']
-  heading_level INT,                          -- deepest heading level (1, 2, 3)
-  title TEXT,                                 -- section heading text
+  heading_path TEXT[],                         -- e.g., ARRAY['Overview', 'Architecture']
+  heading_level INT,                           -- deepest heading level (1, 2, 3)
+  title TEXT,                                  -- section heading text
   content TEXT NOT NULL,
   char_count INT NOT NULL,
 
   -- Embeddings (768 dims, cloud-only: OpenAI text-embedding-3-small default)
+  -- Only current chunks (version_id IS NULL) need embeddings; archived chunks retain their
+  -- original embeddings but are excluded from search.
   embedding_primary VECTOR(768) NOT NULL,
-  embedding_upgrade VECTOR(768),              -- optional: alternative embedder
+  embedding_upgrade VECTOR(768),               -- optional: alternative embedder
 
-  -- Full Text Search
+  -- Full Text Search (generated column — always in sync with content)
   fts tsvector GENERATED ALWAYS AS (
     setweight(to_tsvector('english', COALESCE(title, '')), 'A') ||
     setweight(to_tsvector('english', content), 'B')
@@ -145,44 +166,92 @@ CREATE TABLE cerefox_chunks (
   embedder_primary TEXT NOT NULL DEFAULT 'text-embedding-3-small',
   embedder_upgrade TEXT,
 
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-
-  UNIQUE(document_id, chunk_index)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- No updated_at: chunks are immutable once created
 );
 ```
+
+Note: there is no `UNIQUE(document_id, chunk_index)` constraint — multiple versions of the same chunk co-exist. Uniqueness of current-version chunks is enforced by a **partial unique index** (see Indexes below).
+
+#### cerefox_document_versions
+
+One row per historical version of a document. Created automatically on every content-changing update before the document is overwritten. **No content TEXT column** — version content is reconstructed from the archived chunks that reference this version's `id` via `version_id`.
+
+```sql
+CREATE TABLE cerefox_document_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID NOT NULL REFERENCES cerefox_documents(id) ON DELETE CASCADE,
+  version_number INT NOT NULL,                 -- monotonically increasing per document (1, 2, 3…)
+  content_hash TEXT NOT NULL,                  -- SHA-256 of the content at snapshot time
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb, -- metadata snapshot at time of version
+  chunk_count INT NOT NULL DEFAULT 0,          -- chunk_count at time of snapshot
+  total_chars INT NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'manual',       -- who triggered the update that displaced this version
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+  UNIQUE(document_id, version_number)
+);
+```
+
+Retrieving version content: `SELECT content FROM cerefox_chunks WHERE version_id = '<version_id>' ORDER BY chunk_index`. This reconstruction mirrors how current content is retrieved (`version_id IS NULL`), keeping a single code path for both.
 
 #### Indexes
 
 ```sql
--- FTS
-CREATE INDEX idx_cerefox_chunks_fts ON cerefox_chunks USING GIN(fts);
+-- FTS (current chunks only — partial index covers only searchable chunks)
+CREATE INDEX idx_cerefox_chunks_fts ON cerefox_chunks USING GIN(fts)
+  WHERE version_id IS NULL;
 
--- Vector similarity (HNSW)
+-- Vector similarity — HNSW (current chunks only)
 CREATE INDEX idx_cerefox_chunks_emb_primary
   ON cerefox_chunks USING hnsw (embedding_primary vector_cosine_ops)
-  WITH (m = 16, ef_construction = 64);
+  WITH (m = 16, ef_construction = 64)
+  WHERE version_id IS NULL;
 
 CREATE INDEX idx_cerefox_chunks_emb_upgrade
   ON cerefox_chunks USING hnsw (embedding_upgrade vector_cosine_ops)
-  WITH (m = 16, ef_construction = 64);
+  WITH (m = 16, ef_construction = 64)
+  WHERE version_id IS NULL;
 
--- Metadata and lookups
+-- Uniqueness of current-version chunks per document: one chunk_index per doc in the current version
+-- Partial index (WHERE version_id IS NULL) allows the same chunk_index in archived versions.
+CREATE UNIQUE INDEX idx_cerefox_chunks_current_unique
+  ON cerefox_chunks(document_id, chunk_index)
+  WHERE version_id IS NULL;
+
+-- Document lookup by chunk (covers both current and archived chunks within a document)
+CREATE INDEX idx_cerefox_chunks_document ON cerefox_chunks(document_id, chunk_index);
+
+-- Version-specific chunk retrieval (for full document retrieval of a historical version)
+CREATE INDEX idx_cerefox_chunks_version ON cerefox_chunks(version_id, chunk_index)
+  WHERE version_id IS NOT NULL;
+
+-- Document metadata (JSONB) — enables fast filtering by tags, source, etc.
 CREATE INDEX idx_cerefox_docs_metadata ON cerefox_documents USING GIN(metadata);
-CREATE INDEX idx_cerefox_chunks_doc ON cerefox_chunks(document_id, chunk_index);
+
+-- Version lookups (latest version first)
+CREATE INDEX idx_cerefox_versions_doc ON cerefox_document_versions(document_id, version_number DESC);
 ```
+
+**Important**: the partial FTS and HNSW indexes (`WHERE version_id IS NULL`) mean that archived chunks are automatically excluded from all FTS and vector searches at the index level — no explicit filter needed in queries. All search RPCs must still include `AND c.version_id IS NULL` in their WHERE clauses for clarity and correctness on small tables where indexes may not be used.
 
 ### 2.3 Entity Relationships
 
 ```
-cerefox_projects (many) >──< (many) cerefox_documents (1) ──< (many) cerefox_chunks
-                          via cerefox_document_projects
+cerefox_projects (many) >──< (many) cerefox_documents (1) ──< (many) cerefox_chunks [version_id IS NULL]
+                          via cerefox_document_projects        (current version — searchable)
+
+cerefox_documents (1) ──< (many) cerefox_document_versions (1) ──< (many) cerefox_chunks [version_id = id]
+                                  (version metadata)                 (archived chunks — not searchable)
 ```
 
 - A project has many documents; a document can belong to many projects (many-to-many via junction table)
-- A document has many chunks (ordered by chunk_index)
-- Deleting a document cascades to its chunks and junction table rows
-- Deleting a project cascades to junction table rows (documents are not deleted)
+- A document has many chunks: those with `version_id IS NULL` are the current (searchable) version
+- A document has zero or more version rows — only created when content changes
+- Each version row owns its archived chunks via the `version_id` FK on chunks
+- Deleting a document cascades to all its chunks (current + archived) and all its version rows
+- Deleting a version row cascades to its archived chunks
+- Deleting a project cascades only to junction table rows (documents are not deleted)
 
 ## 3. Chunking Strategy
 
@@ -202,7 +271,7 @@ Algorithm:
      boundaries. Resulting pieces below MIN_CHUNK_CHARS merge into the preceding.
 ```
 
-Headings H4–H6 are treated as plain body text and do not create boundaries.  No overlaps are added — the heading breadcrumb embedded in each chunk's content provides sufficient context, and overlaps cause duplication when chunks are concatenated for document reconstruction.
+Headings H4–H6 are treated as plain body text and do not create boundaries. No overlaps are added — the heading breadcrumb embedded in each chunk's content provides sufficient context, and overlaps cause duplication when chunks are concatenated for document reconstruction.
 
 ### 3.2 Chunk Metadata
 
@@ -259,41 +328,96 @@ class Embedder(Protocol):
 
 ### 5.1 Search RPCs
 
-RPCs exposed via Supabase MCP:
+RPCs exposed via Supabase MCP / Edge Functions:
 
-1. **`cerefox_hybrid_search`** — fuses FTS and vector similarity with configurable alpha weight
-2. **`cerefox_fts_search`** — keyword/exact search only (names, dates, tags)
-3. **`cerefox_semantic_search`** — pure vector similarity (conceptual questions)
-4. **`cerefox_search_docs`** — document-level hybrid search; deduplicates by document, returns full content
-5. **`cerefox_reconstruct_doc`** — reassemble a full document from its chunks by document ID
-6. **`cerefox_context_expand`** — small-to-big: given chunk IDs, return those chunks plus adjacent neighbours
+| RPC | Description |
+|-----|-------------|
+| `cerefox_hybrid_search` | Chunk-level FTS + vector similarity, returns raw chunks |
+| `cerefox_fts_search` | Keyword/exact search only, returns raw chunks |
+| `cerefox_semantic_search` | Pure vector similarity, returns raw chunks |
+| `cerefox_get_document` | Return full document content + metadata by ID, optionally a specific version |
+| `cerefox_list_document_versions` | List available versions for a document (ID, version_number, size, created_at) |
 
-### 5.2 Small-to-Big Retrieval
+The `cerefox_search` MCP tool (exposed via Edge Function) wraps `cerefox_hybrid_search` and applies automatic threshold-based retrieval assembly — agents never call raw RPCs directly.
 
-When a search returns chunks, agents often need more context. The retrieval strategy:
+### 5.2 Automatic Small-to-Big Retrieval
+
+The `cerefox_search` tool automatically adjusts how results are assembled based on document size. Agents always call the same tool; the threshold logic is internal.
+
+**Decision point**: `total_chars` on the matched document vs `CEREFOX_SMALL_TO_BIG_THRESHOLD` (default: 40000 chars).
 
 ```
-1. Chunk-level search (fast, targeted)
-     ↓
-2. For top results, identify parent documents
-     ↓
-3. Expand to include sibling chunks from same document
-     ↓
-4. Assemble expanded content, respecting MAX_RESPONSE_BYTES
-     ↓
-5. Return with metadata indicating what was included/truncated
+cerefox_search(query) →
+  1. Run hybrid search → get top-N chunk matches (across all documents)
+  2. Group matches by document
+  3. For each matched document:
+     │
+     ├─ total_chars ≤ SMALL_TO_BIG_THRESHOLD
+     │    └─ Return full document content (current behavior, unchanged)
+     │
+     └─ total_chars > SMALL_TO_BIG_THRESHOLD
+          └─ For each matched chunk in this document:
+               - Include the chunk itself
+               - Include CEREFOX_CONTEXT_WINDOW chunks before and after (by chunk_index)
+             Deduplicate (overlapping windows produce each chunk once)
+             Sort by chunk_index
+             Include metadata: is_partial=true, chunks_returned/chunks_total
+  4. Assemble results respecting MAX_RESPONSE_BYTES
 ```
 
-**Algorithm (V1 - implemented):**
-- Return individual chunks with `document_id` in metadata
-- Agent can call `cerefox_reconstruct_doc` for full document context
-- Response size is checked against `MAX_RESPONSE_BYTES` (default: 65000)
+**Why automatic (not a parameter)**: agents shouldn't need to know document sizes or manage retrieval strategy. The threshold is a system-level setting, not a per-query choice.
 
-**Algorithm (V2 - implemented):**
-- `cerefox_context_expand` RPC: given an array of chunk IDs, return those chunks plus N adjacent siblings within the same document (`p_window_size`, default 1)
-- `cerefox_search_docs` RPC: full document-level search — runs hybrid search internally, deduplicates by document, returns reconstructed full content for the top N distinct documents
+**`match_count` semantics**: the parameter controls the number of **distinct documents** returned, not raw chunks. For large documents, each document match expands into multiple chunks (up to `(CEREFOX_CONTEXT_WINDOW * 2 + 1)` chunks per matched chunk hit). The total chunk count returned can exceed `match_count`.
 
-### 5.3 Response Size Management
+**Context window default (1)**: each matched chunk gains one neighbor on each side — returning 3 contiguous chunks per hit at minimum. Configurable via `CEREFOX_CONTEXT_WINDOW`.
+
+**Metadata in search results**: every result includes:
+
+| Field | Small doc | Large doc |
+|-------|-----------|-----------|
+| `doc_id` | ✓ | ✓ |
+| `title` | ✓ | ✓ |
+| `total_chars` | ✓ | ✓ |
+| `chunk_count` | ✓ | ✓ |
+| `is_partial` | `false` | `true` |
+| `chunks_returned` | = chunk_count | < chunk_count |
+| `version_count` | ✓ | ✓ |
+| `created_at` | ✓ | ✓ |
+| `updated_at` | ✓ | ✓ |
+
+`version_count` = number of historical snapshots in `cerefox_document_versions` for this document. `0` means the document has never been updated (no previous versions exist). Agents can use this to decide whether to call `cerefox_list_versions`.
+
+When `is_partial=true`, agents can retrieve the complete document via `cerefox_get_document`.
+
+### 5.3 Full Document Retrieval
+
+A separate primitive from search: retrieve the **complete text** of a specific document by ID, bypassing threshold logic entirely. This is the correct tool for:
+
+- Viewing the full text of a large document that search returns only chunks from
+- Retrieving a previous version for comparison or manual restore
+- Backup and export pipelines that need complete content
+- Agents that need the full document for re-ingestion, translation, or analysis
+
+**MCP tool: `cerefox_get_document`**
+
+Parameters:
+- `document_id` (required) — UUID of the document
+- `version_id` (optional) — UUID of a specific version; omit for current content
+
+Returns: full `content`, all `metadata`, `created_at`, `updated_at`, and a `versions` summary (count, latest version number, latest version timestamp).
+
+**MCP tool: `cerefox_list_versions`**
+
+Parameters:
+- `document_id` (required)
+
+Returns: list of version rows — `id`, `version_number`, `total_chars`, `chunk_count`, `source`, `created_at`.
+
+**REST API**: `GET /api/documents/{id}` and `GET /api/documents/{id}/versions` — same semantics as the MCP tools, for use by the web UI and scripting.
+
+**CLI**: `cerefox get-doc <id>` (current content) and `cerefox get-doc <id> --version <version-id>` (specific version). `cerefox list-versions <id>` lists version history.
+
+### 5.4 Response Size Management
 
 Supabase MCP has a ~65K bytes limit on responses. This is parameterized:
 
@@ -301,6 +425,8 @@ Supabase MCP has a ~65K bytes limit on responses. This is parameterized:
 - RPCs that return content check accumulated size
 - When limit is near, response includes a `truncated: true` flag and `remaining_chunks: N` count
 - Agent can make follow-up calls to retrieve remaining content
+
+Note: `cerefox_get_document` is exempt from this limit when called directly (it is a single-document retrieval, not a multi-document search). The size limit applies to `cerefox_search` result assembly only.
 
 ## 6. Ingestion Pipeline
 
@@ -313,18 +439,36 @@ Input (MD file, paste, PDF, DOCX)
   ↓
 [Compute content hash] (dedup check)
   ↓
+[IF document exists AND update_if_exists=True AND content changed]
+  │
+  │  ↓ CALL cerefox_snapshot_version(document_id, source) RPC
+  │    → creates version row (version_number = max + 1, metadata/hash snapshot)
+  │    → UPDATE cerefox_chunks SET version_id = <new_version_id>
+  │         WHERE document_id = <id> AND version_id IS NULL
+  │         (archives all current chunks — makes document temporarily empty)
+  │    → runs lazy cleanup inline:
+  │         DELETE versions WHERE created_at < NOW() - retention_window
+  │         AND version_number < max(version_number)  [always-one-backup]
+  │         → cascades to delete expired archived chunks
+  │    → returns: version_id, archived chunk_count, archived total_chars
+  │
+  ↓
 [Parse markdown structure]
   ↓
 [Split into chunks] (heading-based)
   ↓
-[Compute embeddings] (primary, optionally upgrade)
+[Compute embeddings via cloud API] (primary, optionally upgrade)
   ↓
-[Store document + chunks in DB]
+[INSERT new chunks with version_id = NULL] (these are now the current version)
   ↓
-[Backup raw markdown] (file system / git)
+[UPDATE cerefox_documents: title, content_hash, chunk_count, total_chars, metadata]
   ↓
 [Report status] (success / error event)
 ```
+
+**Key property**: between `cerefox_snapshot_version` and the new chunk insert, the document temporarily has zero current chunks. This window is short (a single transaction or tight sequence of operations). The document row's `chunk_count` is updated atomically at the end.
+
+**Unified caller pattern**: both the Python pipeline and the TypeScript Edge Functions call `cerefox_snapshot_version` as an RPC before inserting new chunks. No parallel implementations.
 
 ### 6.2 Fire-and-Forget Design
 
@@ -337,12 +481,186 @@ Ingestion is designed to be asynchronous and non-blocking:
 ### 6.3 Deduplication
 
 - Content hash (SHA-256) computed on raw markdown
-- If hash exists in `cerefox_documents`, ingestion is skipped (or optionally updates metadata)
+- If hash exists in `cerefox_documents.content_hash`, ingestion is skipped (or optionally updates metadata if `update_if_exists=True` and content is identical — skip re-chunking, skip version snapshot since content unchanged)
 - This prevents accidental double-ingestion of the same file
 
-## 7. Backup Strategy
+### 6.4 Update vs. Create
 
-### 7.1 Options
+When `update_if_exists=True`:
+
+| Case | Action |
+|------|--------|
+| Document not found (by title) | Create new document — no version snapshot needed |
+| Document found, content unchanged (same hash) | Update metadata only — no version snapshot, no re-chunking |
+| Document found, content changed | `cerefox_snapshot_version` RPC → insert new chunks → update document metadata |
+
+The version snapshot captures the state *before* the update: `content_hash`, `metadata`, `chunk_count`, `total_chars`, and `source` of the outgoing version. Content itself is retained in the archived chunks (no TEXT copy needed).
+
+**Metadata-only updates do not create a version**: when only title or metadata changes (content hash matches), the document is updated directly. No version row is created. This is documented in the web UI and CLI — version history tracks content changes only.
+
+**Title matching note**: there is no `UNIQUE` constraint on `title` in `cerefox_documents`. If multiple documents share the same title (e.g., different versions manually ingested), `update_if_exists` matches the first result (by `created_at` ascending). For reliable update behavior, titles should be treated as unique identifiers by the caller — a convention, not a DB constraint. A uniqueness warning is surfaced when a match returns multiple rows.
+
+## 7. Document Versioning Design
+
+### 7.1 Architecture: Chunks-Anchored Versioning
+
+Versioning is implemented by repurposing `cerefox_chunks` as a unified store for both current and archived content. The `version_id` column on chunks is the single discriminator:
+
+```
+version_id IS NULL  →  current version (indexed, searchable, shown in UI)
+version_id = <uuid> →  archived version (not indexed, recoverable, lazily deleted)
+```
+
+When a document is updated with changed content:
+1. `cerefox_snapshot_version(document_id, source)` RPC runs atomically:
+   - Creates a `cerefox_document_versions` row (version_number = max+1, metadata/hash snapshot)
+   - `UPDATE cerefox_chunks SET version_id = <new_version_id> WHERE document_id = <id> AND version_id IS NULL` — archives all current chunks
+   - Runs lazy cleanup (see §7.2)
+   - Returns the new version_id so the caller can proceed
+2. Caller inserts new chunks with `version_id = NULL` (these become the new current version)
+3. Caller updates the document row (content_hash, chunk_count, total_chars, title, metadata)
+
+This RPC is callable from both Python and TypeScript — it is the **single implementation** of the snapshot logic. No parallel Python-vs-TypeScript divergence.
+
+### 7.2 Retention Policy
+
+Versions use a **lazy, retention-based** cleanup policy. No background jobs, no cron. Cleanup runs inside `cerefox_snapshot_version` on every content-changing update.
+
+**Rules** (applied in order):
+
+1. **Always-one-backup**: the most recently created version snapshot (`max(version_number)`) is always retained, regardless of age. A document that is updated daily always has exactly 1 recoverable version.
+2. **Time-window retention**: all versions created within the last `CEREFOX_VERSION_RETENTION_HOURS` (default 48) are retained.
+3. **Lazy cleanup**: candidates for deletion are versions where `created_at < cutoff AND version_number < max(version_number)`. Deleting a version cascades to its archived chunks via FK.
+
+**Cleanup SQL** (runs inside `cerefox_snapshot_version` after creating the new snapshot):
+
+```sql
+DELETE FROM cerefox_document_versions
+WHERE document_id = p_document_id
+  AND created_at < (NOW() - (p_retention_hours || ' hours')::INTERVAL)
+  AND version_number < (
+    SELECT MAX(version_number) FROM cerefox_document_versions
+    WHERE document_id = p_document_id
+  );
+-- Cascade: deleted version rows → archived chunks with that version_id are also deleted
+```
+
+**Behavior examples:**
+
+| Update pattern | Versions retained |
+|---------------|-------------------|
+| Updated once per day | Always exactly 1 version (yesterday's chunks) |
+| Updated 10× in 2 hours, then no updates for 3 days | All 10 retained for 48h; then reduced to 1 on next update |
+| Never updated | No versions, no archived chunks (zero storage cost) |
+| Content identical on update | No new version created (dedup check prevents redundant snapshot) |
+| Metadata-only update | No new version created (content unchanged) |
+
+### 7.3 What Versions Store
+
+**Version row** (`cerefox_document_versions`):
+
+| Field | Description |
+|-------|-------------|
+| `version_number` | Monotonically increasing per document (1, 2, 3…) |
+| `content_hash` | SHA-256 of content at snapshot time |
+| `metadata` | JSONB metadata snapshot at time of displacement |
+| `chunk_count` | How many chunks the document had at snapshot time |
+| `total_chars` | Character count at snapshot time |
+| `source` | Who triggered the update that displaced this version |
+| `created_at` | When this version was created (= when the update happened) |
+
+**Version content** (in `cerefox_chunks` WHERE `version_id = <id>`):
+Full chunk rows including content, heading_path, and embeddings. Retrieved via:
+```sql
+SELECT content FROM cerefox_chunks
+WHERE version_id = '<version_id>'
+ORDER BY chunk_index;
+```
+
+### 7.4 Restore Workflow
+
+There is no in-place restore API. Restore is a user operation:
+
+```
+1. cerefox_list_document_versions(document_id) → pick target version_id
+2. cerefox_get_document(document_id, version_id=<target>) → get old content (from archived chunks)
+3. cerefox_ingest(title=<same title>, content=<old content>, update_if_exists=True)
+   → snapshots the current (bad) state and installs the old content as the new current
+```
+
+This preserves a full audit trail — the "bad" state becomes a version, and the restored content becomes the new current. No data is destroyed.
+
+### 7.5 Why Versions Are Not Searchable
+
+Archived chunks exist in `cerefox_chunks` but are excluded from all search indexes (`WHERE version_id IS NULL` on FTS and HNSW partial indexes). This means:
+- Search always operates on current-version content only
+- The HNSW index does not grow with version history (predictable performance)
+- No search RPC changes are needed to prevent version leakage into results
+
+For time-series or journaling use cases, the correct pattern is **append, not update** — each entry is a separate document. Versioning is a safety net for accidental overwrites, not a temporal search feature.
+
+### 7.6 New RPC: cerefox_snapshot_version
+
+```sql
+CREATE FUNCTION cerefox_snapshot_version(
+    p_document_id      UUID,
+    p_source           TEXT DEFAULT 'manual',
+    p_retention_hours  INT  DEFAULT 48
+)
+RETURNS TABLE (
+    version_id      UUID,
+    version_number  INT,
+    chunk_count     INT,
+    total_chars     INT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_version_id      UUID;
+    v_version_number  INT;
+    v_chunk_count     INT;
+    v_total_chars     INT;
+    v_content_hash    TEXT;
+    v_metadata        JSONB;
+BEGIN
+    -- Read current document state for the snapshot
+    SELECT d.content_hash, d.metadata, d.chunk_count, d.total_chars
+    INTO v_content_hash, v_metadata, v_chunk_count, v_total_chars
+    FROM cerefox_documents d WHERE d.id = p_document_id;
+
+    -- Determine next version_number
+    SELECT COALESCE(MAX(version_number), 0) + 1
+    INTO v_version_number
+    FROM cerefox_document_versions WHERE document_id = p_document_id;
+
+    -- Create the version row
+    INSERT INTO cerefox_document_versions
+        (document_id, version_number, content_hash, metadata, chunk_count, total_chars, source)
+    VALUES
+        (p_document_id, v_version_number, v_content_hash, v_metadata, v_chunk_count, v_total_chars, p_source)
+    RETURNING id INTO v_version_id;
+
+    -- Archive current chunks by pointing them to the new version
+    UPDATE cerefox_chunks
+    SET version_id = v_version_id
+    WHERE document_id = p_document_id AND version_id IS NULL;
+
+    -- Lazy cleanup: delete expired versions (cascade deletes their archived chunks)
+    DELETE FROM cerefox_document_versions
+    WHERE document_id = p_document_id
+      AND created_at < (NOW() - (p_retention_hours || ' hours')::INTERVAL)
+      AND version_number < v_version_number;  -- never delete the one we just created
+
+    RETURN QUERY SELECT v_version_id, v_version_number, v_chunk_count, v_total_chars;
+END;
+$$;
+```
+
+## 8. Backup Strategy
+
+### 8.1 Options
 
 | Approach | When | Pros | Cons |
 |----------|------|------|------|
@@ -350,7 +668,7 @@ Ingestion is designed to be asynchronous and non-blocking:
 | Git repo | Any | Versioned, diffable, pushable to remote | Git overhead, large repos |
 | Cloud storage | GCP deployment | Durable, scalable | Cost, complexity |
 
-### 7.2 Recommended Approach
+### 8.2 Recommended Approach
 
 - **V1**: File system backup — store raw markdown files in a structured directory
   - `backups/YYYY/MM/document-title-hash.md`
@@ -359,9 +677,9 @@ Ingestion is designed to be asynchronous and non-blocking:
   - Useful for version tracking, can push to GitHub for offsite backup
 - **V3**: Cloud storage — if deploying to Cloud Run, use GCS bucket
 
-## 8. Web Application
+## 9. Web Application
 
-### 8.1 Technology Choice
+### 9.1 Technology Choice
 
 FastAPI + Jinja2 + HTMX for a lightweight, interactive web UI with no JavaScript build step.
 
@@ -371,18 +689,19 @@ Rationale:
 - HTMX provides interactivity (search-as-you-type, partial page updates) without a JS framework
 - Can be deployed locally or on Cloud Run with minimal config
 
-### 8.2 Pages/Features
+### 9.2 Pages/Features
 
 1. **Dashboard**: recent documents, ingestion status, project counts
 2. **Knowledge Browser**: search and navigate stored content by project, tags, date
-3. **Document Viewer**: view a reconstructed document with its chunks highlighted
-4. **Ingest**: upload markdown files or paste content
-5. **Projects/Metadata**: manage projects, view/edit metadata schema
-6. **Status**: ingestion queue, errors, system health
+3. **Document Viewer**: view a document with its chunks highlighted; link to version history
+4. **Version History**: list previous versions for a document; view diff; trigger restore
+5. **Ingest**: upload markdown files or paste content
+6. **Projects/Metadata**: manage projects, view/edit metadata schema
+7. **Status**: ingestion queue, errors, system health
 
-## 9. MCP Integration
+## 10. MCP Integration
 
-### 9.1 Architecture: Agent Access Paths
+### 10.1 Architecture: Agent Access Paths
 
 Cerefox exposes three access paths, serving different client types:
 
@@ -391,7 +710,7 @@ Path 1 — Local stdio MCP (cerefox mcp)
   Desktop clients: Claude Desktop, Cursor, Claude Code
   └── cerefox mcp (local stdio subprocess)
         └── Python SDK → Supabase DB + OpenAI embeddings
-              Full hybrid search, cerefox_search + cerefox_ingest tools
+              Tools: cerefox_search, cerefox_ingest, cerefox_get_document
   Requires: Python + uv + local repo clone
 
 Path 2 — Remote MCP Edge Function (cerefox-mcp) [RECOMMENDED]
@@ -400,15 +719,19 @@ Path 2 — Remote MCP Edge Function (cerefox-mcp) [RECOMMENDED]
   Claude Desktop: via supergateway (npx, stdio-to-HTTP bridge)
   └── cerefox-mcp Supabase Edge Function (MCP Streamable HTTP, spec 2025-03-26)
         └── Internal fetch → cerefox-search / cerefox-ingest Edge Functions
-              Full hybrid search, same cerefox_search + cerefox_ingest tools
+              Tools: cerefox_search, cerefox_ingest, cerefox_get_document
   Requires: URL + Supabase anon key; Node.js for Claude Desktop (npx supergateway)
   URL: https://<project>.supabase.co/functions/v1/cerefox-mcp
 
-Path 3 — GPT Actions / HTTP (cerefox-search + cerefox-ingest)
+Path 3 — GPT Actions / HTTP (dedicated Edge Functions)
   Cloud ChatGPT (chatgpt.com)
-  └── GPT Actions → cerefox-search / cerefox-ingest Edge Functions (HTTP POST)
-        └── OpenAI embed + cerefox_search_docs RPC
-              Full hybrid search via Edge Functions
+  └── GPT Actions → Edge Functions (HTTP POST, anon key)
+        ├── cerefox-search        (search + embedding)
+        ├── cerefox-ingest        (ingest + versioning via RPC)
+        ├── cerefox-metadata      (list metadata keys)
+        ├── cerefox-get-document  (full document retrieval, current or archived)
+        └── cerefox-list-versions (list version history)
+              All Edge Functions use service-role key internally; callers use anon key
 
 (Limited) Cloud Claude (claude.ai web)
   └── Remote Supabase MCP (mcp.supabase.com)
@@ -416,35 +739,26 @@ Path 3 — GPT Actions / HTTP (cerefox-search + cerefox-ingest)
               FTS keyword search only (no server-side embedding)
 ```
 
-**Key constraint for Path 1**: `cerefox mcp` is a stdio process — it only runs on the local
-machine. Desktop clients launch it as a subprocess. Cloud clients cannot reach it.
+**Key constraint for Path 1**: `cerefox mcp` is a stdio process — it only runs on the local machine. Desktop clients launch it as a subprocess. Cloud clients cannot reach it.
 
-**Path 2 vs Path 1 trade-offs**: Path 2 (remote) requires no local install and works from
-any machine with just a URL + anon key. Path 1 (local) is slightly faster (no HTTPS round-
-trip to Supabase) and is preferable if Python + uv are already installed.
+**Path 2 vs Path 1 trade-offs**: Path 2 (remote) requires no local install and works from any machine with just a URL + anon key. Path 1 (local) is slightly faster (no HTTPS round-trip to Supabase) and is preferable if Python + uv are already installed.
 
-### 9.2 Built-in MCP Server (`cerefox mcp`)
-
-`src/cerefox/mcp_server.py` is a proper MCP server using the MCP Python SDK. It is a
-**legacy fallback** for environments where the remote `cerefox-mcp` Edge Function is not
-available. The remote path is recommended for all clients that support Streamable HTTP.
-
-**Why not raw Supabase MCP + fetch?**
-The `mcp-server-fetch` package is a web reader (GET-only) — it cannot make authenticated
-POST requests to the Edge Functions. The built-in server solves this by using the Python SDK
-directly, no HTTP gymnastics needed.
-
-**Exposed tools:**
+### 10.2 MCP Tools
 
 | Tool | Direction | Description |
 |------|-----------|-------------|
-| `cerefox_search` | Read | Document-level hybrid search (FTS + semantic). Returns complete reconstructed documents. Always use this — not chunk-level RPCs. |
-| `cerefox_ingest` | Write | Save a note or document with full chunking + embedding. |
+| `cerefox_search` | Read | Hybrid search (FTS + semantic). Automatically applies small-to-big threshold: returns full doc for small docs, chunks + neighbors for large docs. Always use this for search. |
+| `cerefox_ingest` | Write | Save a note or document with full chunking + embedding. Automatically versions previous content if document already exists. |
+| `cerefox_get_document` | Read | Retrieve complete document text by ID. Bypasses threshold logic. Optionally specify a version_id for historical content. |
+| `cerefox_list_versions` | Read | List available versions for a document (version_number, size, timestamp, source). |
+| `cerefox_list_metadata_keys` | Read | Discover metadata keys in use across the knowledge base (key, doc_count, example values). |
 
 **How `cerefox_search` works internally:**
 1. Embeds the query with `CloudEmbedder` (OpenAI `text-embedding-3-small`)
-2. Calls `cerefox_search_docs` RPC — hybrid FTS + pgvector cosine similarity
-3. Returns up to `match_count` full documents, truncating at `max_response_bytes`
+2. Calls `cerefox_hybrid_search` RPC — FTS + pgvector cosine similarity
+3. Groups results by document
+4. For each document: applies threshold logic (full content vs. chunks + neighbors)
+5. Returns up to `match_count` documents/chunks, truncating at `max_response_bytes`
 
 **Recommended system prompt for Claude Desktop:**
 ```
@@ -452,21 +766,44 @@ You have access to my personal knowledge base via the cerefox_search tool.
 When answering questions in this session, always call cerefox_search first
 with a relevant query. Cite doc_title for every claim drawn from the knowledge
 base. Use cerefox_ingest to save anything I ask you to save to the knowledge
-base (in md format).
+base (in md format). If search returns partial results for a large document
+(is_partial=true), use cerefox_get_document to retrieve the full text.
 ```
 
-### 9.3 Supabase Edge Functions (HTTP, for GPT Actions / scripts)
+### 10.3 Supabase Edge Functions (HTTP, for GPT Actions / scripts)
 
-The Edge Functions (`cerefox-search`, `cerefox-ingest`) are deployed to Supabase and callable
-via HTTP POST with an anon key. They are the backend for:
-- ChatGPT cloud GPT Actions
-- curl / scripted access
-- Any HTTP client that can send a POST with custom headers
+The dedicated Edge Functions are deployed to Supabase and callable via HTTP POST with an anon
+key. They are the backend for ChatGPT GPT Actions, curl / scripted access, and any HTTP client:
 
-For desktop AI clients, the recommended path is the remote `cerefox-mcp` Edge Function
-(Path 2). The local `cerefox mcp` server (Path 1) is a legacy fallback for offline use.
+| Edge Function | Operaton | Description |
+|--------------|----------|-------------|
+| `cerefox-search` | Search | Hybrid FTS + semantic search with server-side embedding |
+| `cerefox-ingest` | Write | Ingest/update a document; calls `cerefox_snapshot_version` RPC on update |
+| `cerefox-metadata` | Metadata | List all metadata keys across documents |
+| `cerefox-get-document` | Read | Full document retrieval (current or archived version) |
+| `cerefox-list-versions` | Read | List archived version history for a document |
 
-### 9.4 Postgres RPCs (for direct SQL access)
+**Design principle — Edge Function as thin HTTP adapter over Postgres RPC:**
+
+Every Edge Function is a thin HTTP adapter. Business logic lives in Postgres RPCs (SECURITY
+DEFINER, service-role access). The Edge Function:
+1. Validates the request (required fields, types)
+2. Calls the Supabase client with the **service-role key** to execute the RPC
+3. Formats and returns the response as JSON
+
+Callers authenticate with the **anon key** (JWT validated by the Supabase API gateway).
+The service-role key is never exposed to callers — it is read from `SUPABASE_SERVICE_ROLE_KEY`
+at runtime inside the Edge Function.
+
+**Single implementation principle**: each operation is implemented once in a Postgres RPC.
+Both the Python pipeline and the TypeScript Edge Functions call the same RPCs — no parallel
+implementations. The `cerefox-mcp` Edge Function calls the other dedicated Edge Functions via
+internal fetch (not the RPCs directly), keeping the business logic in one place per operation.
+
+For desktop AI clients, the recommended path is the remote `cerefox-mcp` Edge Function (Path
+2). The local `cerefox mcp` server (Path 1) is a legacy fallback for offline use.
+
+### 10.4 Postgres RPCs (for direct SQL access)
 
 All search RPCs remain available for direct SQL execution via the Supabase MCP
 (`execute_sql` tool) or psql. Useful for cloud Claude.ai (FTS keyword search only):
@@ -476,30 +813,27 @@ All search RPCs remain available for direct SQL execution via the Supabase MCP
 | `cerefox_fts_search` | Keyword search, returns chunks |
 | `cerefox_semantic_search` | Vector search, requires pre-computed embedding |
 | `cerefox_hybrid_search` | FTS + vector combined, requires embedding |
-| `cerefox_search_docs` | Document-level hybrid, requires embedding |
-| `cerefox_reconstruct_doc` | Fetch full document by ID |
-| `cerefox_context_expand` | Small-to-big: expand chunks with neighbours |
-| `cerefox_save_note` | Store a note (no chunking/embedding — use `cerefox_ingest` for searchable notes) |
+| `cerefox_get_document` | Fetch full document by ID; optionally a specific version |
+| `cerefox_list_document_versions` | List version history for a document |
 
-### 9.5 Remote MCP Edge Function (`cerefox-mcp`)
+### 10.5 Remote MCP Edge Function (`cerefox-mcp`)
 
 `supabase/functions/cerefox-mcp/index.ts` implements the MCP Streamable HTTP transport
 (spec 2025-03-26) as a Supabase Edge Function. It is a thin protocol adapter:
 
-- Handles MCP JSON-RPC 2.0 methods: `initialize`, `initialized`, `ping`, `tools/list`,
-  `tools/call`
-- For `tools/call`, delegates to `cerefox-search` or `cerefox-ingest` via internal fetch
+- Handles MCP JSON-RPC 2.0 methods: `initialize`, `initialized`, `ping`, `tools/list`, `tools/call`
+- For `tools/call`, delegates to the appropriate dedicated Edge Function via internal fetch:
+  - `cerefox_search`             → `cerefox-search`
+  - `cerefox_ingest`             → `cerefox-ingest`
+  - `cerefox_list_metadata_keys` → `cerefox-metadata`
+  - `cerefox_get_document`       → `cerefox-get-document`
+  - `cerefox_list_versions`      → `cerefox-list-versions`
 - Stateless — no session tracking; each request is independent
-- Auth: Supabase API gateway validates the JWT (anon key); the caller's Authorization
-  header is forwarded to internal Edge Function calls
+- Auth: Supabase API gateway validates the JWT (anon key); the caller's Authorization header is forwarded to internal Edge Function calls
 
-This replaces the previously planned Cloud Run deployment for remote MCP access. It has
-zero additional hosting cost and requires no new infrastructure — it runs inside the same
-Supabase project as the existing Edge Functions.
+## 11. Deployment Topologies
 
-## 10. Deployment Topologies
-
-### 10.1 Local Development
+### 11.1 Local Development
 
 ```
 Local machine
@@ -509,7 +843,7 @@ Local machine
         (embeddings via OpenAI API)
 ```
 
-### 10.2 Full Local
+### 11.2 Full Local
 
 ```
 Local machine (Docker Compose)
@@ -518,7 +852,7 @@ Local machine (Docker Compose)
     (embeddings via OpenAI API)
 ```
 
-### 10.3 Cloud (GCP)
+### 11.3 Cloud (GCP)
 
 ```
 GCP
@@ -527,11 +861,11 @@ GCP
 └── GCS (backups)
 ```
 
-## 11. Deployment & Operations Scripts
+## 12. Deployment & Operations Scripts
 
 All scripts live in `scripts/` and are standalone Python files. They import from `src/cerefox/` for shared config and DB client logic, but are not part of the application runtime.
 
-### 11.1 Script Inventory
+### 12.1 Script Inventory
 
 | Script | Purpose | Key flags |
 |--------|---------|-----------|
@@ -541,22 +875,26 @@ All scripts live in `scripts/` and are standalone Python files. They import from
 | `backup_create.py` | Export all documents + metadata to a local directory of markdown files | `--output-dir`, `--project` |
 | `backup_restore.py` | Re-ingest a backup directory into a fresh (or existing) database | `--input-dir`, `--dry-run` |
 
-### 11.2 Schema Deployment Flow
+### 12.2 Schema Deployment Flow
 
 ```
 1. Provision Supabase project (or start local Docker Postgres)
 2. Set environment variables (.env file)
 3. Run: python scripts/db_deploy.py
    - Creates extensions (pgvector, uuid-ossp)
-   - Creates tables (cerefox_projects, cerefox_documents, cerefox_chunks)
-   - Creates indexes (GIN, HNSW)
-   - Creates triggers (updated_at)
-   - Creates RPCs (cerefox_hybrid_search, cerefox_fts_search, etc.)
+   - Creates tables (cerefox_projects, cerefox_documents, cerefox_chunks,
+                      cerefox_document_versions)
+   - Creates indexes (GIN, HNSW, version lookup)
+   - Creates triggers (updated_at on documents)
+   - Creates RPCs (cerefox_hybrid_search, cerefox_fts_search,
+                   cerefox_get_document, cerefox_list_document_versions)
    - Prints summary of created objects
 4. Run: python scripts/db_status.py (verify everything is in place)
 ```
 
-### 11.3 Backup & Restore Flow
+**Migration for existing deployments**: adding `cerefox_document_versions` is a non-destructive `CREATE TABLE` migration. Existing documents and chunks are unaffected. The migration is applied via `db_migrate.py` with migration number `0003_add_document_versions.sql`.
+
+### 12.3 Backup & Restore Flow
 
 ```
 Backup:
@@ -574,13 +912,16 @@ Restore:
   → Reports: N documents restored, M skipped (already exist), K failed
 ```
 
-### 11.4 Migration Strategy
+Note: backups export current document content only. Version history is not exported (it is ephemeral by design — retention window applies).
+
+### 12.4 Migration Strategy
 
 Schema changes are applied as numbered SQL files:
 ```
 src/cerefox/db/migrations/
   0001_initial_schema.sql
   0002_add_chunk_heading_level.sql
+  0003_add_document_versions.sql
   ...
 ```
 `db_migrate.py` tracks applied migrations in a `cerefox_migrations` table and applies only new ones, in order, idempotently.

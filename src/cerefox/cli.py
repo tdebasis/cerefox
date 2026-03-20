@@ -550,6 +550,63 @@ def mcp_server() -> None:
     run()
 
 
+# ── get-doc ───────────────────────────────────────────────────────────────────
+
+
+@cli.command("get-doc")
+@click.argument("document_id")
+@click.option(
+    "--version",
+    "version_id",
+    default=None,
+    help="UUID of an archived version to retrieve (from 'cerefox list-versions').",
+)
+def get_doc(document_id: str, version_id: str | None) -> None:
+    """Print the full content of a document to stdout.
+
+    Pass --version <uuid> to retrieve an archived (previous) version.
+    """
+    settings = Settings()
+    client = _get_client(settings)
+    doc = client.get_document_content(document_id, version_id=version_id)
+    if doc is None:
+        label = f" (version {version_id})" if version_id else ""
+        click.echo(f"Document{label} not found: {document_id}", err=True)
+        raise SystemExit(1)
+    click.echo(f"# {doc.get('doc_title', 'Untitled')}")
+    click.echo(f"source: {doc.get('doc_source')} | chunks: {doc.get('chunk_count')} | chars: {doc.get('total_chars')}")
+    click.echo("")
+    click.echo(doc.get("full_content") or "")
+
+
+# ── list-versions ─────────────────────────────────────────────────────────────
+
+
+@cli.command("list-versions")
+@click.argument("document_id")
+def list_versions(document_id: str) -> None:
+    """List all archived versions of a document.
+
+    Each row shows the version number, UUID, source, size, and timestamp.
+    Use the version UUID with 'cerefox get-doc --version <uuid>' to retrieve
+    the content of a specific version.
+    """
+    settings = Settings()
+    client = _get_client(settings)
+    versions = client.list_document_versions(document_id)
+    if not versions:
+        click.echo("No archived versions found.")
+        return
+    click.echo(f"Versions for document {document_id}:")
+    click.echo(f"{'v#':<4}  {'created_at':<27}  {'source':<10}  {'chunks':>6}  {'chars':>8}  version_id")
+    click.echo("-" * 90)
+    for v in versions:
+        click.echo(
+            f"v{v['version_number']:<3}  {v['created_at']:<27}  {v['source']:<10}  "
+            f"{v['chunk_count']:>6}  {v['total_chars']:>8}  {v['version_id']}"
+        )
+
+
 # ── web ───────────────────────────────────────────────────────────────────────
 
 
