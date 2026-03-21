@@ -732,13 +732,20 @@ limit (MCP path). Server ceiling enforced via `min(agent_request, SERVER_MAX)`.
 respect a configurable budget with server-ceiling enforcement. Full guide in
 `docs/guides/response-limits.md`.
 
+### 13D: Documents (full) Search UI Redesign
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13D.1 | Redesign doc-level results with collapsible content and Full/Excerpt badge | Done | `<details>` per result; amber "Excerpt" badge when `is_partial=True`, green "Full" otherwise; metadata line includes best-match heading path |
+| 13D.2 | Make "Documents (full)" the default search mode | Done | `routes.py` default `mode`: `"hybrid"` → `"docs"`; moved to top of dropdown in `browser.html` |
+
 ---
 
 ## Current Focus
 
-**Iteration 13A complete.** Metadata-filtered search across all access paths (RPCs, Python,
-Edge Functions, MCP, CLI, Web UI, GPT Actions). 13C complete — response size limits redesigned
-to be opt-in per call.
+**Iterations 13A and 13C complete.** Metadata-filtered search across all access paths.
+Response size limits redesigned to be opt-in per call. Documents (full) search UI redesigned
+with collapsible content and Full/Excerpt badges; set as default search mode.
 
 **Next**: Iteration 13B knowledge architecture research (edges/graph model, context bundles,
-agent provenance), and SQL redeploy for the small-to-big threshold change (13C.7).
+agent provenance).
