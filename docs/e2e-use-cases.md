@@ -25,74 +25,102 @@ after each run, even on failure.
 - **Edge Function tests**: Need a JWT-format key. Set `CEREFOX_SUPABASE_ANON_KEY` in `.env` (the Supabase anon key from Dashboard > Settings > API). Skipped if not available.
 - **UI tests**: Require the web app to be running (`uv run uvicorn cerefox.api.app:app`)
 
+---
+
 ## Test Layers
 
-### 1. Supabase REST API (Python client → PostgREST)
+### 1. Supabase REST API — Document & Project Lifecycle
 
 File: `tests/e2e/test_api_e2e.py` — marker: `@pytest.mark.e2e`
 
-| # | Use Case | Status |
-|---|----------|--------|
-| 1.1 | **Ingest a document** — insert doc + chunks, verify doc and chunk rows exist | Done |
-| 1.2 | **List documents** — verify the ingested doc appears in list_documents | Done |
-| 1.3 | **Get document by ID** — fetch and verify fields | Done |
-| 1.4 | **Find document by title** — exact title lookup | Done |
-| 1.5 | **Update document metadata** — change metadata, verify persisted | Done |
-| 1.6 | **List chunks for document** — verify chunk count and content | Done |
-| 1.7 | **Reconstruct document** — call reconstruct_doc RPC, verify full_content | Done |
-| 1.8 | **List metadata keys** — verify the RPC returns keys from test doc metadata | Done |
-| 1.9 | **FTS search** — keyword search finds the test document | Done |
-| 1.10 | **Delete document** — delete and verify it's gone | Done |
-| 1.11 | **Project CRUD** — create, list, get, update, delete a project | Done |
-| 1.12 | **Document-project assignment** — assign doc to project, verify, unassign | Done |
-| 1.13 | **Count documents** — verify count with and without project filter | Done |
-| 1.14 | **Content hash deduplication** — ingest same content twice, second is skipped | Done |
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestDocumentLifecycle` | `test_ingest_and_verify` | Ingest → verify doc + chunks exist → FTS search finds it → update metadata → reconstruct → delete | Done |
+| `TestContentHashDedup` | `test_duplicate_content_is_skipped` | Re-ingest same content; second call returns `skipped=True` | Done |
+| `TestProjectCRUD` | `test_project_lifecycle` | Create → list → get → update → delete a project | Done |
+| `TestDocumentProjectAssignment` | `test_assign_and_count` | Assign doc to project, verify doc count in project, unassign | Done |
 
-### 2. Edge Functions (HTTP POST → Supabase Edge Functions)
+### 2. Supabase REST API — Document Versioning
 
 File: `tests/e2e/test_api_e2e.py` — marker: `@pytest.mark.e2e`
 
-Requires `CEREFOX_SUPABASE_ANON_KEY` in `.env` (JWT format). Skipped otherwise.
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestVersioningLifecycle` | `test_update_creates_version_and_archived_chunks` | Update doc content → verify version row created, old chunks archived (`version_id` set), new current chunks inserted | Done |
+| `TestVersioningLifecycle` | `test_metadata_only_update_skips_versioning` | Update only metadata (title/tags, same content) → verify no version row is created | Done |
 
-| # | Use Case | Status |
-|---|----------|--------|
-| 2.1 | **cerefox-ingest** — POST a document, verify response, verify doc in DB | Done |
-| 2.2 | **cerefox-search** — search for the ingested doc via FTS mode | Done |
-| 2.3 | **cerefox-metadata** — list metadata keys, verify test doc's keys appear | Done |
-| 2.4 | **cerefox-ingest update** — re-ingest with update_if_exists=true, verify updated | Done |
-| 2.5 | **cerefox-ingest dedup** — re-ingest same content, verify skipped | Done |
+### 3. Edge Functions (HTTP POST → Supabase Edge Functions)
 
-### 3. Web UI (Playwright browser tests)
+File: `tests/e2e/test_api_e2e.py` — marker: `@pytest.mark.e2e`
+
+Requires `CEREFOX_SUPABASE_ANON_KEY` in `.env`. Skipped if not available.
+
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestEdgeFunctionIngest` | `test_ingest_and_dedup` | POST new doc → verify response + DB row; re-POST with `update_if_exists=true` → verify updated; re-POST same content → verify dedup/skipped | Done |
+| `TestEdgeFunctionSearch` | `test_fts_search` | Search for ingested doc via `cerefox-search` Edge Function (FTS mode) | Done |
+| `TestEdgeFunctionMetadata` | `test_list_metadata_keys` | Call `cerefox-metadata` Edge Function, verify test doc's metadata keys appear | Done |
+
+### 4. Small-to-Big Retrieval
+
+File: `tests/e2e/test_api_e2e.py` — marker: `@pytest.mark.e2e`
+
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestSmallToBigRetrieval` | `test_small_doc_is_not_partial` | Ingest a short doc; `search_docs` returns `is_partial=False` and `full_content` matches reconstructed doc | Done |
+| `TestSmallToBigRetrieval` | `test_large_doc_is_partial` | Ingest a large doc (>20 000 chars); `search_docs` returns `is_partial=True` and `chunk_count` (returned) < total chunk count | Done |
+| `TestSmallToBigRetrieval` | `test_context_window_zero_returns_fewer_chunks_than_window_one` | Same large doc with `p_context_window=0` vs `p_context_window=1` — window=0 returns matched chunks only; window=1 returns matched + neighbours | Done |
+| `TestSmallToBigRetrieval` | `test_partial_result_has_no_duplicate_content` | Large doc with `p_context_window=2`; verify no chunk content appears twice in the assembled result | Done |
+
+### 5. Metadata-Filtered Search
+
+File: `tests/e2e/test_api_e2e.py` — marker: `@pytest.mark.e2e`
+
+Two docs are ingested with different metadata; each test asserts only the matching doc is returned.
+
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestMetadataFilteredSearch` | `test_metadata_filter_python_search_docs` | `SearchClient.search_docs()` with `metadata_filter` — only doc A (matching filter) returned | Done |
+| `TestMetadataFilteredSearch` | `test_metadata_filter_hybrid_search` | `SearchClient.hybrid()` with `metadata_filter` — only doc B (matching filter) returned | Done |
+| `TestMetadataFilteredSearch` | `test_metadata_filter_fts_search` | `SearchClient.fts()` with `metadata_filter` — only matching doc returned | Done |
+| `TestMetadataFilteredSearch` | `test_metadata_filter_edge_function` | `cerefox-search` Edge Function with `metadata_filter` JSON body field | Done |
+| `TestMetadataFilteredSearch` | `test_metadata_filter_no_match_returns_empty` | Filter that matches no documents returns empty results | Done |
+
+### 6. Web UI (Playwright browser tests)
 
 File: `tests/e2e/test_ui_e2e.py` — marker: `@pytest.mark.ui`
 
 Requires: web app running at `http://127.0.0.1:8000/`
 
+| Class | Test | Use Case | Status |
+|-------|------|----------|--------|
+| `TestDashboard` | `test_loads_and_shows_stats` | Dashboard renders with doc count, recent docs, and projects | Done |
+| `TestIngestPaste` | `test_paste_ingest_creates_document` | Paste content → submit → verify doc appears in search → cleanup | Done |
+| `TestSearch` | `test_search_page_loads` | Knowledge Browser page renders with search form | Done |
+| `TestSearch` | `test_fts_search_returns_results` | FTS search returns results with no error | Done |
+| `TestProjects` | `test_project_crud` | Create project via UI → verify in list → delete → verify gone | Done |
+| `TestDocumentView` | `test_document_page_loads` | Navigate from dashboard to a document detail page | Done |
+| `TestVersioningUI` | `test_upload_new_file_creates_version_row` | Upload a `.md` file → update with new file → verify version download link appears in UI | Done |
+
+### 7. MCP Server (future)
+
 | # | Use Case | Status |
 |---|----------|--------|
-| 3.1 | **Dashboard loads** — verify stats and recent docs render | Done |
-| 3.2 | **Paste ingest** — full flow: paste content → verify in search → delete | Done |
-| 3.3 | **Search page loads** — verify knowledge browser renders | Done |
-| 3.4 | **FTS search** — search and verify no errors | Done |
-| 3.5 | **Project CRUD** — create → verify → delete via UI | Done |
-| 3.6 | **Document detail** — navigate from dashboard → document detail page | Done |
+| 7.1 | MCP `cerefox_search` tool — end-to-end via stdio transport | TODO |
+| 7.2 | MCP `cerefox_ingest` tool — end-to-end via stdio transport | TODO |
+| 7.3 | MCP `cerefox_list_metadata_keys` tool — end-to-end via stdio transport | TODO |
+| 7.4 | MCP `cerefox_get_document` tool — end-to-end via stdio transport | TODO |
+| 7.5 | MCP `cerefox_list_versions` tool — end-to-end via stdio transport | TODO |
 
-### 4. MCP Server (future)
-
-| # | Use Case | Status |
-|---|----------|--------|
-| 4.1 | MCP cerefox_search tool — end-to-end via stdio transport | TODO |
-| 4.2 | MCP cerefox_ingest tool — end-to-end via stdio transport | TODO |
-| 4.3 | MCP cerefox_list_metadata_keys tool — end-to-end via stdio transport | TODO |
+---
 
 ## TODO / Future Cases
 
-- Semantic search and hybrid search e2e (requires embedding cost per run)
-- Context expand RPC
-- Document update-content (re-chunk + re-embed via web UI)
-- Project-filtered search
+- Hybrid and semantic search e2e (requires embedding cost per run; currently only FTS is tested via Edge Functions)
+- Project-filtered search (search with `project_id` constraint)
 - Large document chunking verification (chunk sizes, heading paths)
-- Edge Function error handling (missing fields, invalid JSON)
+- Edge Function error handling (missing required fields, invalid JSON, unknown project)
 - Edit document metadata via UI (add/remove/rename metadata keys)
-- File upload ingest via UI
-- Document download (.md export)
+- Document download (`.md` export) via UI
+- Metadata filter via web UI (filter row inputs)
+- Version retrieval via CLI (`cerefox get-doc --version`)
