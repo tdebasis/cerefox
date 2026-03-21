@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import unicodedata
 from functools import lru_cache
 from typing import Any
 
@@ -47,6 +48,34 @@ from cerefox.retrieval.search import DocResult, DocSearchResponse, SearchClient
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _title_to_filename(title: str, max_len: int = 80) -> str:
+    """Return a filesystem- and HTTP-header-safe filename stem from a document title.
+
+    HTTP headers must be latin-1; document titles may contain arbitrary Unicode.
+    Strategy:
+      1. Replace common Unicode punctuation with ASCII equivalents (em/en dash → '-').
+      2. Decompose accented characters via NFKD normalisation, then drop non-ASCII.
+      3. Strip characters that are invalid in filenames on major OSes.
+    """
+    # Map common Unicode punctuation to readable ASCII equivalents.
+    _UNICODE_MAP = str.maketrans({
+        "\u2014": "-",   # em dash
+        "\u2013": "-",   # en dash
+        "\u2018": "'",   # left single quote
+        "\u2019": "'",   # right single quote
+        "\u201c": '"',   # left double quote
+        "\u201d": '"',   # right double quote
+        "\u2026": "...", # ellipsis
+        "\u00b7": "-",   # middle dot
+    })
+    name = title.translate(_UNICODE_MAP)
+    # Decompose accented chars (é → e + combining accent) then drop non-ASCII.
+    name = unicodedata.normalize("NFKD", name).encode("ascii", errors="ignore").decode("ascii")
+    # Strip characters invalid in filenames across Windows/macOS/Linux.
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(". ")
+    return (name or "document")[:max_len]
 
 
 # ── Dependency helpers ────────────────────────────────────────────────────────
@@ -515,8 +544,7 @@ def document_download(
     base = os.path.basename(source_path) if source_path else ""
     if not base:
         title = (doc_record or {}).get("title") or "document"
-        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(". ") or "document"
-        base = f"{safe[:80]}.md"
+        base = f"{_title_to_filename(title)}.md"
 
     # For versioned downloads, append "v<N> - <date>" before the extension.
     if version_id:

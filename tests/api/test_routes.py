@@ -430,6 +430,20 @@ class TestDocumentDownload:
         resp = test_client.get("/document/doc-uuid-1/download")
         assert "My Pasted Note.md" in resp.headers["content-disposition"]
 
+    def test_filename_handles_unicode_in_title(self, test_client, mock_client):
+        """Titles with Unicode (em dash, accents) must produce a latin-1-safe filename."""
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-uuid-1",
+            "title": "Teliboria \u2014 A World",  # em dash
+            "source_path": None,
+            "created_at": "2026-03-01T00:00:00Z", "updated_at": "2026-03-01T00:00:00Z",
+        }
+        resp = test_client.get("/document/doc-uuid-1/download")
+        assert resp.status_code == 200
+        cd = resp.headers["content-disposition"]
+        # Em dash mapped to '-'; result must be latin-1 safe (no UnicodeEncodeError).
+        assert "Teliboria - A World.md" in cd
+
     def test_versioned_filename_appends_version_and_date(self, test_client, mock_client):
         """Version downloads get 'Title v<N> - <date>.md' as filename."""
         mock_client.get_document_content.return_value = {"full_content": "old content"}
