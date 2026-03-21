@@ -421,6 +421,28 @@ class TestDocumentDownload:
         resp = test_client.get("/document/doc-uuid-1/download")
         assert "# Test Document" in resp.text
 
+    def test_filename_falls_back_to_title_when_no_source_path(self, test_client, mock_client):
+        """Paste-ingested docs have no source_path — filename should use the title."""
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-uuid-1", "title": "My Pasted Note", "source_path": None,
+            "created_at": "2026-03-01T00:00:00Z", "updated_at": "2026-03-01T00:00:00Z",
+        }
+        resp = test_client.get("/document/doc-uuid-1/download")
+        assert "My Pasted Note.md" in resp.headers["content-disposition"]
+
+    def test_versioned_filename_appends_version_and_date(self, test_client, mock_client):
+        """Version downloads get 'Title v<N> - <date>.md' as filename."""
+        mock_client.get_document_content.return_value = {"full_content": "old content"}
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-uuid-1", "title": "My Note", "source_path": None,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+        }
+        mock_client.list_document_versions.return_value = [
+            {"version_id": "ver-uuid-1", "version_number": 2, "created_at": "2026-03-15T10:30:00Z"},
+        ]
+        resp = test_client.get("/document/doc-uuid-1/download?version_id=ver-uuid-1")
+        assert "My Note v2 - 2026-03-15.md" in resp.headers["content-disposition"]
+
     def test_returns_404_for_missing_document(self, test_client, mock_client):
         mock_client.reconstruct_doc.return_value = None
         resp = test_client.get("/document/missing-id/download")

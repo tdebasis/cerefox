@@ -30,6 +30,8 @@ only the relevant HTML partial; otherwise they return the full page.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from functools import lru_cache
 from typing import Any
 
@@ -505,13 +507,31 @@ def document_download(
         return Response(status_code=404, content="Document not found")
     content = doc.get("full_content") or ""
     doc_record = client.get_document_by_id(document_id)
-    source_path = (doc_record or {}).get("source_path") or "document.md"
-    import os  # noqa: PLC0415
-    filename = os.path.basename(source_path) or "document.md"
+
+    # Derive a useful download filename.
+    # 1. Use the basename of source_path for file-ingested documents.
+    # 2. Fall back to the document title for paste-ingested docs (no source_path).
+    source_path = (doc_record or {}).get("source_path") or ""
+    base = os.path.basename(source_path) if source_path else ""
+    if not base:
+        title = (doc_record or {}).get("title") or "document"
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(". ") or "document"
+        base = f"{safe[:80]}.md"
+
+    # For versioned downloads, append "v<N> - <date>" before the extension.
+    if version_id:
+        versions = client.list_document_versions(document_id)
+        ver = next((v for v in versions if v.get("version_id") == version_id), None)
+        if ver:
+            ver_num = ver.get("version_number", "")
+            ver_date = (ver.get("created_at") or "")[:10]
+            stem = base[:-3] if base.endswith(".md") else base
+            base = f"{stem} v{ver_num} - {ver_date}.md"
+
     return Response(
         content=content,
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="{base}"'},
     )
 
 
