@@ -199,6 +199,7 @@ Full setup for all options: `docs/guides/connect-agents.md`
 | `docs/guides/setup-supabase.md` | Supabase project setup |
 | `docs/guides/configuration.md` | All configuration options |
 | `docs/guides/connect-agents.md` | MCP agent integration |
+| `docs/guides/access-paths.md` | All access layers, credentials, and integration paths |
 | `docs/guides/setup-local.md` | Local Docker setup |
 | `docs/guides/ops-scripts.md` | Backup, restore, migrate |
 | `docs/guides/setup-cloud-run.md` | Google Cloud Run deployment |
