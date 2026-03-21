@@ -245,12 +245,18 @@ async function handleToolCall(
       doc_title?: string;
       full_content?: string;
       best_score?: number;
+      is_partial?: boolean;
+      chunk_count?: number;
+      total_chars?: number;
     }>;
 
     const parts: string[] = rows.map((row) => {
       const title = row.doc_title ?? "Untitled";
       const score = row.best_score != null ? ` (score: ${row.best_score.toFixed(3)})` : "";
-      return `## ${title}${score}\n\n${row.full_content ?? ""}`;
+      const partial = row.is_partial
+        ? ` — partial (${row.chunk_count} of ${(row.total_chars ?? 0).toLocaleString()} chars)`
+        : "";
+      return `## ${title}${score}${partial}\n\n${row.full_content ?? ""}`;
     });
 
     let output = parts.join("\n\n---\n\n");
