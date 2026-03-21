@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Sync Cerefox project documentation into the knowledge base.
 
-Ingests README.md and every Markdown file under docs/ into the specified
-project, updating existing documents in-place so their content stays current.
-Run this any time after editing documentation.
+Ingests README.md and every Markdown file under docs/ (including docs/research/)
+into the specified project, updating existing documents in-place so their content
+stays current. Run this any time after editing documentation.
 
 Usage:
     python scripts/sync_docs.py
@@ -29,11 +29,8 @@ from cerefox.ingestion.pipeline import IngestionPipeline
 # Files / directories to sync, relative to the repo root.
 _TARGETS = [
     "README.md",        # project overview
-    "docs/",            # all guides, plans, specs (recursively)
+    "docs/",            # all guides, plans, specs, and research notes (recursively)
 ]
-
-# Skip research notes — they are exploratory, not authoritative.
-_SKIP_DIRS = {"research"}
 
 
 def _extract_title(content: str, fallback: str) -> str:
@@ -56,9 +53,6 @@ def _collect_files(repo_root: Path) -> list[tuple[Path, str]]:
     docs_dir = repo_root / "docs"
     if docs_dir.is_dir():
         for md in sorted(docs_dir.rglob("*.md")):
-            # Skip any subdirectory listed in _SKIP_DIRS.
-            if any(part in _SKIP_DIRS for part in md.relative_to(docs_dir).parts[:-1]):
-                continue
             rel = str(md.relative_to(repo_root))
             files.append((md, rel))
 

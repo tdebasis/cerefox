@@ -194,10 +194,12 @@ uv run python scripts/sync_docs.py [OPTIONS]
 (`OPENAI_API_KEY` or `CEREFOX_FIREWORKS_API_KEY`). The target project must already exist
 (create it with `uv run cerefox create-project cerefox` if needed).
 
-**What gets synced**: `README.md` + all `.md` files under `docs/`, except `docs/research/`
-(exploratory notes, not authoritative documentation). Files are matched to existing
-documents by their relative path (`source_path`), so re-running the script updates content
-in-place rather than creating duplicates.
+**What gets synced**: `README.md` + all `.md` files under `docs/` (including `docs/research/`).
+Research notes are included because Cerefox is a shared memory layer for multiple agents —
+exploratory notes, experiments, and decision rationale are exactly the kind of context
+agents benefit from. Files are matched to existing documents by their relative path
+(`source_path`), so re-running the script updates content in-place rather than creating
+duplicates.
 
 Example output:
 ```
