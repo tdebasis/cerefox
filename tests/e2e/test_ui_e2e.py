@@ -206,8 +206,10 @@ class TestVersioningUI:
             v2_file.write_text("# Version Two\n\nUpdated content for UI versioning test.", encoding="utf-8")
 
             page.set_input_files('input[name="file"]', str(v2_file))
-            page.click('button:has-text("Upload")')
-            page.wait_for_timeout(3000)
+            # Use type="submit" to avoid ambiguity with the "✕ Cancel upload" toggle button
+            # which also contains "upload" (case-insensitive has-text match).
+            page.click('#upload-section button[type="submit"]')
+            page.wait_for_timeout(4000)  # Allow time for embedding API round-trip
 
             # ── Step 4: reload document page and verify version row ──────────
             page.goto(f"{BASE_URL}/document/{doc_id}")
@@ -215,7 +217,8 @@ class TestVersioningUI:
 
             expect(page.locator("text=Backup Versions")).to_be_visible(timeout=5000)
             expect(page.locator("text=v1")).to_be_visible()
-            expect(page.locator("a:has-text('download')")).to_be_visible()
+            # Target the version-specific download link (has ?version_id= in the URL)
+            expect(page.locator("a[href*='version_id']")).to_be_visible()
 
         finally:
             # ── Cleanup ──────────────────────────────────────────────────────

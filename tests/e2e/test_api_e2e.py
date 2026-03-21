@@ -472,9 +472,18 @@ class TestSmallToBigRetrieval:
 
     _LARGE_DOC_THRESHOLD = 40_000  # Must match rpcs.sql DEFAULT for cerefox_search_docs
 
-    @staticmethod
-    def _make_large_content(target_chars: int = 44_000) -> str:
-        """Build a large Teliboria-themed markdown document exceeding *target_chars*."""
+    # Unique phrase used ONLY in the anchor section — absent from all other sections.
+    # Tests that search for this phrase will match only 1–2 chunks, proving partial retrieval.
+    _ANCHOR_PHRASE = "zephyrite beacon singularity xanthochroi"
+
+    @classmethod
+    def _make_large_content(cls, target_chars: int = 44_000) -> str:
+        """Build a large Teliboria-themed markdown document exceeding *target_chars*.
+
+        Includes a unique anchor section at the end that only matches a targeted query.
+        All other sections use repetitive filler text to pad the document above the
+        small-to-big threshold.
+        """
         section_text = (
             "The ancient towers of Teliboria rise above the canopy of the Verdant Reach, "
             "each stone carved with the sigils of the First Architects who shaped the land "
@@ -491,6 +500,13 @@ class TestSmallToBigRetrieval:
             lines.append(f"## Region {section_num}: Chronicles of the Verdant Reach\n\n")
             lines.append(section_text * 8)
             lines.append("\n\n")
+        # Unique anchor section — this phrase appears nowhere else in the document.
+        lines.append(f"## The Beacon Chamber\n\n")
+        lines.append(
+            f"Deep within the sealed vaults of the Emberveil Archive lies the {cls._ANCHOR_PHRASE}. "
+            "This artefact is unique among all known relics and has no counterpart in any other "
+            "region or era. Its purpose remains unknown to all scholars."
+        )
         return "".join(lines)
 
     def test_small_doc_is_not_partial(
@@ -557,10 +573,13 @@ class TestSmallToBigRetrieval:
 
         time.sleep(1)
 
-        embedding = e2e_embedder.embed("aetheric currents First Architects")
-        rows = e2e_client.search_docs(
-            "aetheric currents First Architects", embedding, match_count=5
-        )
+        # Search for the unique anchor phrase — only 1 chunk contains it.
+        # Use min_score=0.5 so the 30+ filler chunks (low similarity) are filtered out,
+        # leaving only the anchor chunk as the seed for context expansion.
+        # Context expansion (window=1) then returns at most 2–3 chunks from the 32-chunk doc.
+        anchor_query = self._ANCHOR_PHRASE
+        embedding = e2e_embedder.embed(anchor_query)
+        rows = e2e_client.search_docs(anchor_query, embedding, match_count=5, min_score=0.5)
         our_rows = [r for r in rows if r["document_id"] == result.document_id]
         assert our_rows, (
             f"Large doc {result.document_id} not found in search results. "
@@ -571,10 +590,13 @@ class TestSmallToBigRetrieval:
         assert row["is_partial"] is True
         # total_chars should equal the full document size (not just returned content)
         assert row["total_chars"] == doc["total_chars"]
-        # Partial content should be smaller than the full document
-        assert len(row.get("full_content", "")) < row["total_chars"]
-        # chunk_count reflects only the returned (partial) chunks
-        assert row["chunk_count"] < result.chunk_count
+        # Partial retrieval returns fewer chunks than the full document.
+        # (Assembled text may be slightly larger than total_chars due to \n\n join separators,
+        # so we compare chunk counts, not byte lengths.)
+        assert row["chunk_count"] < result.chunk_count, (
+            f"Expected partial result to have fewer chunks than full doc "
+            f"({row['chunk_count']} returned, {result.chunk_count} total)"
+        )
 
     def test_context_window_zero_returns_fewer_chunks_than_window_one(
         self,
@@ -737,14 +759,16 @@ class TestMetadataFilteredSearch:
         title_a = unique_title("MetaFilter Doc A")
         title_b = unique_title("MetaFilter Doc B")
 
-        # Ingest two documents with DIFFERENT metadata
+        # Ingest two documents with DIFFERENT metadata.
+        # Both contain "metafilter testdoc" so FTS matches both; the filter
+        # then discriminates by metadata type.
         res_a = e2e_pipeline.ingest_text(
-            "# MetaFilter A\n\nThis is a decision document about architecture.",
+            "# MetaFilter A\n\nThis is a metafilter testdoc decision document about architecture.",
             title_a,
             metadata={"e2e_type": "decision", "e2e_status": "active"},
         )
         res_b = e2e_pipeline.ingest_text(
-            "# MetaFilter B\n\nThis is a reference note for testing.",
+            "# MetaFilter B\n\nThis is a metafilter testdoc reference note for testing.",
             title_b,
             metadata={"e2e_type": "note", "e2e_status": "active"},
         )
@@ -769,7 +793,7 @@ class TestMetadataFilteredSearch:
 
         # 4.1a: filter by type=decision → only doc A should appear
         resp = sc.search_docs(
-            "MetaFilter document",
+            "metafilter testdoc",
             match_count=10,
             metadata_filter={"e2e_type": "decision"},
         )
@@ -779,7 +803,7 @@ class TestMetadataFilteredSearch:
 
         # 4.1b: filter by type=note → only doc B should appear
         resp_b = sc.search_docs(
-            "MetaFilter document",
+            "metafilter testdoc",
             match_count=10,
             metadata_filter={"e2e_type": "note"},
         )
@@ -789,7 +813,7 @@ class TestMetadataFilteredSearch:
 
         # 4.1c: multi-key filter (AND) — both docs have e2e_status=active but different type
         resp_c = sc.search_docs(
-            "MetaFilter document",
+            "metafilter testdoc",
             match_count=10,
             metadata_filter={"e2e_type": "decision", "e2e_status": "active"},
         )
@@ -798,7 +822,7 @@ class TestMetadataFilteredSearch:
         assert res_b.document_id not in doc_ids_c
 
         # 4.1d: no filter → both documents may appear
-        resp_d = sc.search_docs("MetaFilter document", match_count=10)
+        resp_d = sc.search_docs("metafilter testdoc", match_count=10)
         doc_ids_d = [r.document_id for r in resp_d.results]
         assert res_a.document_id in doc_ids_d or res_b.document_id in doc_ids_d, (
             "At least one MetaFilter doc should appear without a filter"

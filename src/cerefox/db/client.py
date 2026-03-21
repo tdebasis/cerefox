@@ -356,7 +356,7 @@ class CerefoxClient:
                 self.client.table("cerefox_chunks")
                 .select(
                     "id, document_id, chunk_index, heading_path, heading_level, "
-                    "title, content, char_count, "
+                    "title, content, char_count, version_id, "
                     "embedding_primary, embedding_upgrade, embedder_primary, embedder_upgrade, "
                     "created_at"
                 )
