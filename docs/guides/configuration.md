@@ -84,6 +84,23 @@ The `cerefox-search` and `cerefox-ingest` Supabase Edge Functions handle embeddi
 | `CEREFOX_MAX_RESPONSE_BYTES` | `200000` | Maximum bytes in a single search response (local MCP path). See explanation below. |
 | `CEREFOX_MIN_SEARCH_SCORE` | `0.50` | Minimum cosine similarity for hybrid and semantic search results (0.0–1.0). In **hybrid search**, chunks that matched the FTS keyword operator (`@@`) always pass through regardless of their vector score — the threshold only filters vector-only results. In **semantic search**, all results are filtered. The pure **FTS search** mode is unaffected. Increase for stricter precision; decrease for wider recall. |
 
+### Metadata filter
+
+The `metadata_filter` search parameter (available in all search modes, all access paths) performs **server-side JSONB containment filtering** before vector ranking. It is not a configuration variable — it is passed per request.
+
+- Filters are expressed as a JSON object: `{"type": "decision", "status": "active"}`
+- All key-value pairs must match (AND semantics via PostgreSQL `@>` operator)
+- Uses the existing GIN index on `cerefox_documents.metadata` — no additional schema changes needed
+- `NULL` filter = no restriction (backwards-compatible default)
+- Discover available keys via `cerefox_list_metadata_keys` MCP tool or `cerefox list-metadata-keys` CLI
+
+Access paths:
+- **MCP tool**: `metadata_filter` argument on `cerefox_search`
+- **CLI**: `cerefox search "query" --filter '{"type": "decision"}'`
+- **Web UI**: Metadata Filter section (collapsible) in the Knowledge Browser
+- **GPT Actions**: `metadata_filter` field in `searchKnowledgeBase` request body (schema v1.4.0)
+- **HTTP API**: `metadata_filter` JSON key in the `cerefox-search` Edge Function POST body
+
 **Score threshold guidance (OpenAI text-embedding-3-small):**
 
 | Score | Meaning |
@@ -99,29 +116,33 @@ Recommended values:
 - `0.70`–`0.80` — high precision; only very close semantic matches
 - `0.0` — disable filtering entirely (returns all RPC results, not recommended)
 
-### Response size limit — why 200 000 bytes?
+### Response size limits
 
-Cerefox has two access paths, and each has its own size budget:
+Response size limits are **opt-in per call** — they apply only on the MCP and Edge Function
+paths where an AI agent's context window matters. The web UI and CLI always return all results
+with no truncation.
 
-| Path | Where the limit is configured |
-|------|-------------------------------|
-| Local MCP server (`cerefox mcp`) | `CEREFOX_MAX_RESPONSE_BYTES` in `.env` |
-| Edge Functions (`cerefox-search`) | `max_bytes` request parameter (default: 200 000) |
+| Path | Default limit | Ceiling | How to change |
+|------|--------------|---------|---------------|
+| Web UI / CLI | None | None | — |
+| Local MCP server (`cerefox mcp`) | `CEREFOX_MAX_RESPONSE_BYTES` | Same | `.env` |
+| Remote MCP / Edge Function | 200 000 bytes | 200 000 bytes | Agent passes `max_bytes` |
 
-**Why 200 000 as the default?**
+**`CEREFOX_MAX_RESPONSE_BYTES`** sets the default and ceiling for the local MCP server. Agents
+can pass a smaller `max_bytes` in the `cerefox_search` tool call; larger values are silently
+capped at this setting.
 
-200 KB is a safety ceiling that prevents pathological responses (e.g. very high `match_count` × many small documents) while never artificially cutting legitimate results at the default `match_count=5`. Small-to-big retrieval already bounds large-document results to matched chunks + neighbours, so individual results are naturally compact. The original 65 KB default was driven by the Supabase MCP protocol limit, which no longer applies.
+**Why 200 000 as the default?** At the default `match_count=5` and small-to-big threshold of
+20 000 chars, the worst case is 5 × 20 KB ≈ 100 KB — comfortably under 200 KB. The limit
+protects against high `match_count` + large documents without cutting legitimate results at
+defaults. (The original 65 KB default was driven by the Supabase MCP protocol limit, which no
+longer applies.)
 
-Worst-case budget at default settings: 5 results × ~40 KB each (small-doc full content just under the 40 000-char threshold) = ~200 KB. In practice results are much smaller because most docs are short and large docs return only a partial slice.
+**Agent `max_bytes` parameter**: pass this when your model's context window is limited:
+- MCP tool: `{"query": "...", "max_bytes": 50000}`
+- Edge Function body: `{"query": "...", "max_bytes": 50000}`
 
-**When to reduce it:**
-- Your MCP client or LLM has a small context window
-- You want tighter, more focused responses
-
-**When to increase it:**
-- You are using very high `match_count` values and need all results returned
-- For the **local MCP server**, raise `CEREFOX_MAX_RESPONSE_BYTES` in your `.env`
-- For the **Edge Function**, pass `max_bytes` in the request body: `{ "query": "...", "max_bytes": 400000 }`
+See `docs/guides/response-limits.md` for the full guide including behaviour details and examples.
 
 ### RPC-level retrieval parameters
 
@@ -129,7 +150,7 @@ Two retrieval parameters are configured directly in `src/cerefox/db/rpcs.sql` ra
 
 | Parameter | Default | Location | Description |
 |-----------|---------|----------|-------------|
-| `p_small_to_big_threshold` | `40000` chars | `rpcs.sql` — `cerefox_search_docs` | Documents larger than this return matched chunks + neighbours instead of the full document. Set to `0` to always return full content. |
+| `p_small_to_big_threshold` | `20000` chars | `rpcs.sql` — `cerefox_search_docs` | Documents larger than this return matched chunks + neighbours instead of the full document. Set to `0` to always return full content. |
 | `p_context_window` | `1` | `rpcs.sql` — `cerefox_search_docs` | Neighbour chunks on each side of each matched chunk. `N=1` → up to 3 contiguous chunks per hit. `N=0` → matched chunks only. `N=2` → up to 5. |
 
 To change these values, edit the `DEFAULT` values in `cerefox_search_docs` in `src/cerefox/db/rpcs.sql` and redeploy:

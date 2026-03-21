@@ -2,17 +2,28 @@
 
 All search methods return a :class:`SearchResponse` with a list of
 :class:`SearchResult` objects and metadata about how many bytes were used.
-When the cumulative response size would exceed *max_bytes*, further results
-are dropped and the ``truncated`` flag is set.
+
+Response size limiting is **opt-in per call** via the *max_bytes* parameter:
+
+- ``max_bytes=None`` (default) — no truncation; all results from the RPC are
+  returned.  Use this for the web UI and CLI where there is no LLM context
+  constraint.
+- ``max_bytes=<int>`` — results are dropped whole (never mid-document) once the
+  running total exceeds the limit.  Use this for MCP/LLM callers where context
+  size matters.  The caller is responsible for ensuring the value is within a
+  server-enforced ceiling (the local MCP server uses ``CEREFOX_MAX_RESPONSE_BYTES``
+  from ``.env``).
 
 Usage::
 
     from cerefox.retrieval.search import SearchClient
     client_wrap = SearchClient(cerefox_client, embedder, settings)
 
-    resp = client_wrap.hybrid("what is small-to-big retrieval?", match_count=10)
-    for hit in resp.results:
-        print(hit.score, hit.title, hit.content[:200])
+    # Web UI — no limit
+    resp = client_wrap.search_docs("knowledge management", max_bytes=None)
+
+    # MCP server — honour configured limit
+    resp = client_wrap.search_docs("knowledge management", max_bytes=settings.max_response_bytes)
 """
 
 from __future__ import annotations
@@ -153,6 +164,8 @@ class SearchClient:
         alpha: float = 0.7,
         project_id: str | None = None,
         use_upgrade: bool = False,
+        metadata_filter: dict | None = None,
+        max_bytes: int | None = None,
     ) -> SearchResponse:
         """Hybrid FTS + semantic search (recommended default).
 
@@ -162,6 +175,11 @@ class SearchClient:
             alpha: Weight of semantic score vs FTS score (0 = pure FTS, 1 = pure semantic).
             project_id: Limit search to a specific project UUID.
             use_upgrade: Use the upgrade embedding column if available.
+            metadata_filter: Optional JSONB containment filter. Only documents whose
+                metadata contains all specified key-value pairs are returned.
+                Example: {"type": "decision", "status": "active"}
+            max_bytes: Response size budget in bytes. ``None`` (default) = no limit.
+                Pass ``settings.max_response_bytes`` for MCP/LLM callers.
         """
         embedding = self._embedder.embed(query)
         rows = self._client.hybrid_search(
@@ -172,14 +190,17 @@ class SearchClient:
             use_upgrade=use_upgrade,
             project_id=project_id,
             min_score=self._settings.min_search_score,
+            metadata_filter=metadata_filter,
         )
-        return self._build_response(rows, query=query, mode="hybrid")
+        return self._build_response(rows, query=query, mode="hybrid", max_bytes=max_bytes)
 
     def fts(
         self,
         query: str,
         match_count: int = 10,
         project_id: str | None = None,
+        metadata_filter: dict | None = None,
+        max_bytes: int | None = None,
     ) -> SearchResponse:
         """Pure full-text keyword search.
 
@@ -188,13 +209,18 @@ class SearchClient:
         be meaningfully compared against the same threshold.  The @@ operator
         already acts as a hard gate — results that match a keyword query are
         always relevant enough to return.
+
+        Args:
+            metadata_filter: Optional JSONB containment filter applied server-side.
+            max_bytes: Response size budget in bytes. ``None`` (default) = no limit.
         """
         rows = self._client.fts_search(
             query_text=query,
             match_count=match_count,
             project_id=project_id,
+            metadata_filter=metadata_filter,
         )
-        return self._build_response(rows, query=query, mode="fts")
+        return self._build_response(rows, query=query, mode="fts", max_bytes=max_bytes)
 
     def semantic(
         self,
@@ -202,21 +228,29 @@ class SearchClient:
         match_count: int = 10,
         project_id: str | None = None,
         use_upgrade: bool = False,
+        metadata_filter: dict | None = None,
+        max_bytes: int | None = None,
     ) -> SearchResponse:
-        """Pure semantic (vector) search."""
+        """Pure semantic (vector) search.
+
+        Args:
+            metadata_filter: Optional JSONB containment filter applied server-side.
+            max_bytes: Response size budget in bytes. ``None`` (default) = no limit.
+        """
         embedding = self._embedder.embed(query)
         rows = self._client.semantic_search(
             query_embedding=embedding,
             match_count=match_count,
             use_upgrade=use_upgrade,
             project_id=project_id,
+            metadata_filter=metadata_filter,
         )
         # FTS has a natural hard gate (the @@ operator); semantic always returns N
         # results regardless of relevance, so we apply the threshold in Python.
         min_score = self._settings.min_search_score
         if min_score > 0.0:
             rows = [r for r in rows if float(r.get("score") or 0.0) >= min_score]
-        return self._build_response(rows, query=query, mode="semantic")
+        return self._build_response(rows, query=query, mode="semantic", max_bytes=max_bytes)
 
     def search_docs(
         self,
@@ -224,6 +258,8 @@ class SearchClient:
         match_count: int = 5,
         alpha: float = 0.7,
         project_id: str | None = None,
+        metadata_filter: dict | None = None,
+        max_bytes: int | None = None,
     ) -> DocSearchResponse:
         """Document-level hybrid search.
 
@@ -236,6 +272,11 @@ class SearchClient:
                 result contains full content so responses are larger than chunk search).
             alpha: Weight of semantic vs FTS score (0 = pure FTS, 1 = pure semantic).
             project_id: Limit search to a specific project UUID.
+            metadata_filter: Optional JSONB containment filter. Only documents whose
+                metadata contains all specified key-value pairs are returned.
+                Example: {"type": "decision", "status": "active"}
+            max_bytes: Response size budget in bytes. ``None`` (default) = no limit.
+                Pass ``settings.max_response_bytes`` for MCP/LLM callers.
         """
         embedding = self._embedder.embed(query)
         rows = self._client.search_docs(
@@ -245,8 +286,9 @@ class SearchClient:
             alpha=alpha,
             project_id=project_id,
             min_score=self._settings.min_search_score,
+            metadata_filter=metadata_filter,
         )
-        return self._build_doc_response(rows, query=query)
+        return self._build_doc_response(rows, query=query, max_bytes=max_bytes)
 
     def reconstruct(self, document_id: str) -> str | None:
         """Return the full reconstructed markdown content of a document.
@@ -262,9 +304,14 @@ class SearchClient:
         self,
         rows: list[dict],
         query: str,
+        max_bytes: int | None = None,
     ) -> DocSearchResponse:
-        """Convert raw RPC rows into a DocSearchResponse, respecting size limits."""
-        max_bytes = self._settings.max_response_bytes
+        """Convert raw RPC rows into a DocSearchResponse.
+
+        When *max_bytes* is ``None`` all rows are included (no truncation).
+        When *max_bytes* is an integer, rows are dropped whole once the running
+        total would exceed the limit and ``truncated`` is set to ``True``.
+        """
         total_found = len(rows)
         results: list[DocResult] = []
         used_bytes = 0
@@ -273,7 +320,7 @@ class SearchClient:
         for row in rows:
             result = DocResult.from_row(row)
             row_bytes = _estimate_doc_bytes(result)
-            if used_bytes + row_bytes > max_bytes:
+            if max_bytes is not None and used_bytes + row_bytes > max_bytes:
                 truncated = True
                 log.debug(
                     "Response size limit reached (%d/%d bytes) after %d/%d doc results",
@@ -297,9 +344,14 @@ class SearchClient:
         rows: list[dict],
         query: str,
         mode: str,
+        max_bytes: int | None = None,
     ) -> SearchResponse:
-        """Convert raw RPC rows into a :class:`SearchResponse`, respecting size limits."""
-        max_bytes = self._settings.max_response_bytes
+        """Convert raw RPC rows into a :class:`SearchResponse`.
+
+        When *max_bytes* is ``None`` all rows are included (no truncation).
+        When *max_bytes* is an integer, rows are dropped whole once the running
+        total would exceed the limit and ``truncated`` is set to ``True``.
+        """
         total_found = len(rows)
         results: list[SearchResult] = []
         used_bytes = 0
@@ -307,9 +359,8 @@ class SearchClient:
 
         for row in rows:
             result = SearchResult.from_row(row)
-            # Estimate bytes: serialize content + key fields.
             row_bytes = _estimate_bytes(result)
-            if used_bytes + row_bytes > max_bytes:
+            if max_bytes is not None and used_bytes + row_bytes > max_bytes:
                 truncated = True
                 log.debug(
                     "Response size limit reached (%d/%d bytes) after %d/%d results",

@@ -588,73 +588,73 @@ key-value pairs. Multiple pairs are ANDed. NULL filter = no restriction (backwar
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.1 | Add `p_metadata_filter JSONB DEFAULT NULL` to `cerefox_hybrid_search` | Pending | Add `AND (p_metadata_filter IS NULL OR d.doc_metadata @> p_metadata_filter)` to WHERE clause |
-| 13.2 | Add `p_metadata_filter` to `cerefox_fts_search` | Pending | Same pattern |
-| 13.3 | Add `p_metadata_filter` to `cerefox_semantic_search` | Pending | Same pattern |
-| 13.4 | Add `p_metadata_filter` to `cerefox_search_docs` | Pending | Primary path for `cerefox_search` tool; same pattern |
-| 13.5 | Deploy updated RPCs via `db_deploy.py` | Pending | No migration file needed — `db_deploy.py` re-creates RPCs from `rpcs.sql` |
+| 13.1 | Add `p_metadata_filter JSONB DEFAULT NULL` to `cerefox_hybrid_search` | Done | `@>` added to FTS and vector sub-queries |
+| 13.2 | Add `p_metadata_filter` to `cerefox_fts_search` | Done | Same pattern |
+| 13.3 | Add `p_metadata_filter` to `cerefox_semantic_search` | Done | Same pattern |
+| 13.4 | Add `p_metadata_filter` to `cerefox_search_docs` | Done | Passes filter to inner `cerefox_hybrid_search` call |
+| 13.5 | Deploy updated RPCs via `db_deploy.py` | Done | `python scripts/db_deploy.py` ✓ |
 
 #### Step 2 — Python: client.py and search.py
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.6 | Add `metadata_filter: dict \| None = None` to `search_docs()` in `client.py` | Pending | Serialise to JSON when calling RPC; pass as `p_metadata_filter` |
-| 13.7 | Propagate `metadata_filter` through `SearchClient.search_docs()` in `search.py` | Pending | Pass-through; no logic in Python |
+| 13.6 | Add `metadata_filter: dict \| None = None` to `search_docs()` in `client.py` | Done | All 4 client methods updated; param omitted when None |
+| 13.7 | Propagate `metadata_filter` through `SearchClient.search_docs()` in `search.py` | Done | All 4 SearchClient methods updated |
 
 #### Step 3 — cerefox-search Edge Function
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.8 | Accept optional `metadata_filter` (JSON object) in request body | Pending | Pass as `p_metadata_filter` to `cerefox_search_docs` RPC; null when absent |
-| 13.9 | Deploy updated `cerefox-search` | Pending | `npx supabase functions deploy cerefox-search` |
+| 13.8 | Accept optional `metadata_filter` (JSON object) in request body | Done | Validates type; passes via spread into RPC params; echoed in response |
+| 13.9 | Deploy updated `cerefox-search` | Done | `npx supabase functions deploy cerefox-search` ✓ |
 
 #### Step 4 — cerefox-mcp Edge Function
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.10 | Add optional `metadata_filter` parameter to `cerefox_search` tool schema | Pending | JSON object type; pass through to `cerefox-search` internal fetch body |
-| 13.11 | Deploy updated `cerefox-mcp` | Pending | `npx supabase functions deploy cerefox-mcp` |
+| 13.10 | Add optional `metadata_filter` parameter to `cerefox_search` tool schema | Done | `additionalProperties: {type: string}`; passed in fetch body |
+| 13.11 | Deploy updated `cerefox-mcp` | Done | `npx supabase functions deploy cerefox-mcp` ✓ |
 
 #### Step 5 — Local MCP server
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.12 | Add optional `metadata_filter` input to `cerefox_search` tool in `mcp_server.py` | Pending | JSON object; pass to `client.search_docs(metadata_filter=...)` |
+| 13.12 | Add optional `metadata_filter` input to `cerefox_search` tool in `mcp_server.py` | Done | Added to inputSchema; `_handle_search` reads and passes it |
 
 #### Step 6 — CLI
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.13 | Add `--filter / -f` option to `cerefox search` CLI command | Pending | Accepts JSON string; parsed with `json.loads()`; passed to `search_docs()` |
+| 13.13 | Add `--filter / -f` option to `cerefox search` CLI command | Done | JSON string; validated with `json.loads()`; all 3 modes get filter |
 
 #### Step 7 — Web UI
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.14 | Add Metadata Filter section to `browser.html` | Pending | Collapsible section; dynamic key-value rows; key autocomplete via `<datalist>` from `cerefox_list_metadata_keys`; ✕ button per row; "Add filter" JS button |
-| 13.15 | Update `/search` route in `routes.py` to collect and assemble `metadata_filter` | Pending | Collect `meta_filter_key[]` / `meta_filter_value[]` query params; assemble dict; pass to `search_docs()` |
-| 13.16 | Ensure HTMX search trigger includes metadata filter params | Pending | Filter state preserved on partial refresh; active filters visible without scrolling |
+| 13.14 | Add Metadata Filter section to `browser.html` | Done | `<details>` collapsible; `<datalist>` autocomplete; dynamic rows via plain JS; ✕ per row |
+| 13.15 | Update `/search` route in `routes.py` to collect and assemble `metadata_filter` | Done | Parallel `meta_filter_key[]` / `meta_filter_value[]` params; all 4 modes get filter |
+| 13.16 | Ensure HTMX search trigger includes metadata filter params | Done | Named inputs in-form; HTMX serialises them automatically; active pairs restored from context |
 
 #### Step 8 — GPT Actions schema
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.17 | Add `metadata_filter` field to `searchKnowledgeBase` in GPT Actions OpenAPI schema | Pending | Optional object field, additionalProperties: string; bump schema to v1.4.0; update `connect-agents.md` |
+| 13.17 | Add `metadata_filter` field to `searchKnowledgeBase` in GPT Actions OpenAPI schema | Done | Schema bumped to v1.4.0; `connect-agents.md` updated with new field and response description |
 
 #### Step 9 — Tests
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.18 | Unit tests: `metadata_filter` param propagation through `search_docs()` and `SearchClient` | Pending | Mock RPC call; assert `p_metadata_filter` is passed correctly; test None → no param; dict → serialised JSON |
-| 13.19 | E2e test: ingest two docs with differing metadata, search with filter, assert only matching doc returned | Pending | `tests/e2e/test_api_e2e.py`; uses live Supabase; `[E2E]`-prefixed test data; cleaned up automatically |
+| 13.18 | Unit tests: `metadata_filter` param propagation through `search_docs()` and `SearchClient` | Done | 25 new tests in `tests/retrieval/test_search.py` — 441 total pass |
+| 13.19 | E2e test: ingest two docs with differing metadata, search with filter, assert only matching doc returned | Done | 5 e2e tests in `TestMetadataFilteredSearch` (4.1–4.5) covering Python, hybrid, FTS, Edge Function, empty result |
 
 #### Step 10 — Documentation
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.20 | Update `docs/guides/connect-agents.md` — GPT Actions schema v1.4.0 + `metadata_filter` field docs | Pending | |
-| 13.21 | Update `docs/guides/configuration.md` — note that metadata filter uses the existing GIN index | Pending | |
-| 13.22 | Update `README.md` — mention metadata-filtered search in feature table | Pending | |
+| 13.20 | Update `docs/guides/connect-agents.md` — GPT Actions schema v1.4.0 + `metadata_filter` field docs | Done | Combined with 13.17 |
+| 13.21 | Update `docs/guides/configuration.md` — note that metadata filter uses the existing GIN index | Done | Added "Metadata filter" subsection under Retrieval |
+| 13.22 | Update `README.md` — mention metadata-filtered search in feature table | Done | Added row to feature table |
 
 ---
 
@@ -700,12 +700,52 @@ and testing without requiring the remote Supabase instance.
 
 ---
 
+---
+
+## Iteration 13C: Response Size Limits Redesign
+
+**Goal**: Fix a regression where web UI search was being truncated by the MCP response limit,
+and redesign limits to be opt-in per call rather than always applied.
+
+**Root cause**: `SearchClient._build_doc_response()` always applied `settings.max_response_bytes`
+regardless of caller, truncating the web UI just like the MCP path.
+
+**Design**: `max_bytes: int | None = None` — `None` = no truncation (web UI / CLI); `int` = opt-in
+limit (MCP path). Server ceiling enforced via `min(agent_request, SERVER_MAX)`.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13C.1 | Add `max_bytes: int | None = None` to all 4 `SearchClient` methods and both `_build_*` helpers in `search.py` | Done | `None` = no truncation; callers choose their constraint |
+| 13C.2 | Pass `max_bytes=None` in all web UI routes (`routes.py`) | Done | Web UI never truncates |
+| 13C.3 | Pass `max_bytes=None` in all CLI search commands (`cli.py`) | Done | CLI never truncates |
+| 13C.4 | `cerefox-search` Edge Function: add ceiling enforcement `Math.min(requested ?? MAX_BYTES, MAX_BYTES)` | Done | Agent can request less, never more |
+| 13C.5 | Add optional `max_bytes` to `cerefox-mcp` Edge Function tool schema + pass-through | Done | Agents can control budget via MCP tool parameter |
+| 13C.6 | Rewrite `_handle_search` in `mcp_server.py`: read/cap agent `max_bytes`, enforce ceiling, emit truncation message | Done | Local MCP mirrors Edge Function ceiling behaviour |
+| 13C.7 | Lower `p_small_to_big_threshold` default from 40 000 → 20 000 chars in `rpcs.sql` | Done | 5 docs × 20 KB ≈ 100 KB, comfortably under 200 KB ceiling |
+| 13C.8 | Update unit tests in `tests/retrieval/test_search.py` — split truncation tests, add `TestMaxBytesParameter` class | Done | 8 new tests covering all modes and edge cases |
+| 13C.9 | Create `docs/guides/response-limits.md` | Done | Full guide: per-path behaviour, server ceiling, agent parameter |
+| 13C.10 | Update `docs/solution-design.md` §5.2 and §5.4 | Done | Threshold 40K → 20K; opt-in limit model documented |
+| 13C.11 | Update `docs/guides/configuration.md` — response limits section and threshold default | Done | Threshold 40K → 20K; new opt-in model table |
+| 13C.12 | Update `CLAUDE.md` — fix 65 KB reference → 200 KB + opt-in model note | Done | |
+
+**Deliverable**: Web UI and CLI always return all results. MCP and Edge Function paths
+respect a configurable budget with server-ceiling enforcement. Full guide in
+`docs/guides/response-limits.md`.
+
+### 13D: Documents (full) Search UI Redesign
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13D.1 | Redesign doc-level results with collapsible content and Full/Excerpt badge | Done | `<details>` per result; amber "Excerpt" badge when `is_partial=True`, green "Full" otherwise; metadata line includes best-match heading path |
+| 13D.2 | Make "Documents (full)" the default search mode | Done | `routes.py` default `mode`: `"hybrid"` → `"docs"`; moved to top of dropdown in `browser.html` |
+
+---
+
 ## Current Focus
 
-**Iteration 12 complete.** Small-to-big retrieval, document versioning (chunks-anchored),
-full retrieval API (get_document, list_versions), 6 Edge Functions deployed, DB security
-(RLS + search_path pinning), migration tooling, and backup fixes all done.
+**Iterations 13A and 13C complete.** Metadata-filtered search across all access paths.
+Response size limits redesigned to be opt-in per call. Documents (full) search UI redesigned
+with collapsible content and Full/Excerpt badges; set as default search mode.
 
-**Iteration 13 next**: Metadata-filtered search (13A) across all access paths, plus
-knowledge architecture research (13B) — edges/graph model, context bundles, agent provenance.
-Create feature branch `feat/metadata-filter` before starting implementation.
+**Next**: Iteration 13B knowledge architecture research (edges/graph model, context bundles,
+agent provenance).

@@ -201,7 +201,7 @@ class TestSearchPage:
         )
         with patch("cerefox.api.routes.SearchClient") as MockSC:
             MockSC.return_value.hybrid.return_value = search_resp
-            resp = test_client.get("/search?q=my+query")
+            resp = test_client.get("/search?q=my+query&mode=hybrid")
         assert resp.status_code == 200
         assert "Test Document" in resp.text
 
@@ -257,7 +257,7 @@ class TestSearchPage:
         )
         with patch("cerefox.api.routes.SearchClient") as MockSC:
             MockSC.return_value.hybrid.return_value = search_resp
-            resp = test_client.get("/search?q=nothing")
+            resp = test_client.get("/search?q=nothing&mode=hybrid")
         assert resp.status_code == 200
         assert "No results" in resp.text
 

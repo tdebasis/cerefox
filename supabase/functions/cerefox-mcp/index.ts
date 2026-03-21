@@ -61,6 +61,17 @@ const TOOLS = [
           type: "string",
           description: "Filter results to a specific project by name (optional)",
         },
+        metadata_filter: {
+          type: "object",
+          description:
+            "Optional JSONB containment filter. Only documents whose metadata contains ALL specified key-value pairs are returned. Example: {\"type\": \"decision\", \"status\": \"active\"}. Call cerefox_list_metadata_keys first to discover available keys and values. Omit to search all documents.",
+          additionalProperties: { type: "string" },
+        },
+        max_bytes: {
+          type: "integer",
+          description:
+            "Optional response size budget in bytes. Results are dropped whole until the budget is satisfied; a truncated flag is set when results are dropped. Defaults to the server maximum (200000). Pass a smaller value if your context window is limited. Values above the server maximum are silently capped.",
+        },
       },
     },
   },
@@ -219,6 +230,8 @@ async function handleToolCall(
         query: args.query,
         match_count: args.match_count ?? 5,
         project_name: args.project_name,
+        metadata_filter: args.metadata_filter ?? null,
+        ...(args.max_bytes != null ? { max_bytes: args.max_bytes } : {}),
       }),
     });
 
