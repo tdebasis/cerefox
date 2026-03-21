@@ -564,14 +564,136 @@ is retrievable via dedicated API, MCP tool, and CLI.
 
 ---
 
-## Iteration 13: Local Supabase Dev Environment
+## Iteration 13: Metadata-Filtered Search & Knowledge Architecture Research
+
+Three related workstreams: (1) implement server-side metadata filtering across all access
+paths, (2) research and spec the document edges/graph model and context bundles, and
+(3) research agent provenance and activity log.
+
+See `docs/solution-design.md §5.5` for the full metadata filter design.
+
+### 13A: Metadata-Filtered Search (Implementation)
+
+Add a `p_metadata_filter JSONB DEFAULT NULL` parameter to all search RPCs. When supplied,
+only documents whose `doc_metadata @> p_metadata_filter` are included in results. The GIN
+index on `cerefox_documents.metadata` already exists — no schema migration needed.
+
+**Filter semantics**: JSONB containment (`@>`) — the document must contain all specified
+key-value pairs. Multiple pairs are ANDed. NULL filter = no restriction (backwards-compatible).
+
+**Single-implementation principle**: filter logic lives in the RPCs only. All callers
+(Edge Functions, Python client, CLI, web UI) pass the filter as an opaque JSON object.
+
+#### Step 1 — SQL RPCs
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.1 | Add `p_metadata_filter JSONB DEFAULT NULL` to `cerefox_hybrid_search` | Pending | Add `AND (p_metadata_filter IS NULL OR d.doc_metadata @> p_metadata_filter)` to WHERE clause |
+| 13.2 | Add `p_metadata_filter` to `cerefox_fts_search` | Pending | Same pattern |
+| 13.3 | Add `p_metadata_filter` to `cerefox_semantic_search` | Pending | Same pattern |
+| 13.4 | Add `p_metadata_filter` to `cerefox_search_docs` | Pending | Primary path for `cerefox_search` tool; same pattern |
+| 13.5 | Deploy updated RPCs via `db_deploy.py` | Pending | No migration file needed — `db_deploy.py` re-creates RPCs from `rpcs.sql` |
+
+#### Step 2 — Python: client.py and search.py
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.6 | Add `metadata_filter: dict \| None = None` to `search_docs()` in `client.py` | Pending | Serialise to JSON when calling RPC; pass as `p_metadata_filter` |
+| 13.7 | Propagate `metadata_filter` through `SearchClient.search_docs()` in `search.py` | Pending | Pass-through; no logic in Python |
+
+#### Step 3 — cerefox-search Edge Function
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.8 | Accept optional `metadata_filter` (JSON object) in request body | Pending | Pass as `p_metadata_filter` to `cerefox_search_docs` RPC; null when absent |
+| 13.9 | Deploy updated `cerefox-search` | Pending | `npx supabase functions deploy cerefox-search` |
+
+#### Step 4 — cerefox-mcp Edge Function
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.10 | Add optional `metadata_filter` parameter to `cerefox_search` tool schema | Pending | JSON object type; pass through to `cerefox-search` internal fetch body |
+| 13.11 | Deploy updated `cerefox-mcp` | Pending | `npx supabase functions deploy cerefox-mcp` |
+
+#### Step 5 — Local MCP server
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.12 | Add optional `metadata_filter` input to `cerefox_search` tool in `mcp_server.py` | Pending | JSON object; pass to `client.search_docs(metadata_filter=...)` |
+
+#### Step 6 — CLI
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.13 | Add `--filter / -f` option to `cerefox search` CLI command | Pending | Accepts JSON string; parsed with `json.loads()`; passed to `search_docs()` |
+
+#### Step 7 — Web UI
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.14 | Add Metadata Filter section to `browser.html` | Pending | Collapsible section; dynamic key-value rows; key autocomplete via `<datalist>` from `cerefox_list_metadata_keys`; ✕ button per row; "Add filter" JS button |
+| 13.15 | Update `/search` route in `routes.py` to collect and assemble `metadata_filter` | Pending | Collect `meta_filter_key[]` / `meta_filter_value[]` query params; assemble dict; pass to `search_docs()` |
+| 13.16 | Ensure HTMX search trigger includes metadata filter params | Pending | Filter state preserved on partial refresh; active filters visible without scrolling |
+
+#### Step 8 — GPT Actions schema
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.17 | Add `metadata_filter` field to `searchKnowledgeBase` in GPT Actions OpenAPI schema | Pending | Optional object field, additionalProperties: string; bump schema to v1.4.0; update `connect-agents.md` |
+
+#### Step 9 — Tests
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.18 | Unit tests: `metadata_filter` param propagation through `search_docs()` and `SearchClient` | Pending | Mock RPC call; assert `p_metadata_filter` is passed correctly; test None → no param; dict → serialised JSON |
+| 13.19 | E2e test: ingest two docs with differing metadata, search with filter, assert only matching doc returned | Pending | `tests/e2e/test_api_e2e.py`; uses live Supabase; `[E2E]`-prefixed test data; cleaned up automatically |
+
+#### Step 10 — Documentation
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.20 | Update `docs/guides/connect-agents.md` — GPT Actions schema v1.4.0 + `metadata_filter` field docs | Pending | |
+| 13.21 | Update `docs/guides/configuration.md` — note that metadata filter uses the existing GIN index | Pending | |
+| 13.22 | Update `README.md` — mention metadata-filtered search in feature table | Pending | |
+
+---
+
+### 13B: Knowledge Architecture Research — Edges, Context Bundles & Provenance
+
+**Goal**: produce a first-version spec for three related knowledge architecture capabilities
+so that a future implementation iteration can be planned from a solid design.
+
+These are research and design tasks, not implementation. Outcomes: a spec section in
+`solution-design.md` (or dedicated `docs/specs/` files) that captures the data model,
+API shape, and phased rollout plan for each capability.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 13.R1 | **Research: Document Edges / Graph model** — spec the `cerefox_edges` table (source_doc_id, target_doc_id, edge_type, weight, created_by, created_at); define edge type vocabulary (summarizes, supersedes, related_to, depends_on, decided_by, open_question); design RPC for edge creation, traversal, and bundle assembly; evaluate GraphRAG integration path | Pending | Output: §13 in `solution-design.md` or `docs/specs/edges.md` |
+| 13.R2 | **Research: Context Bundles** — evaluate the three options from the Vision doc (extend Project, separate Bundle entity, graph-traversal assembly); define Phase 1 data model (bundle_type + manifest on Project entity); design bundle assembly API (`GET /bundle/{id}` → single Markdown payload with token budgeting); specify staleness detection and refresh semantics; define Session and Handoff bundle types | Pending | Output: §14 in `solution-design.md` or `docs/specs/bundles.md` |
+| 13.R3 | **Research: Agent Provenance & Activity Log** — design `created_by` / `updated_by` fields on `cerefox_documents` (human vs. agent name/model); design review status flag (`unreviewed` → `reviewed` / `rejected`); spec `cerefox_agent_writes` activity query (or view) surfacing recent agent writes; evaluate whether provenance is metadata-convention or a first-class schema field; design web UI "recent agent writes" view | Pending | Output: §15 in `solution-design.md` or `docs/specs/provenance.md` |
+
+**Deliverable**: Implementation-ready spec documents for edges, bundles, and provenance.
+These specs feed directly into a future Iteration 14 planning session.
+
+---
+
+## Iteration 14: Knowledge Architecture Implementation
+
+> **Planned after Iteration 13B research.** Tasks TBD based on spec outputs from 13.R1–13.R3.
+> Expected scope: `cerefox_edges` table + RPCs, Phase 1 Context Bundles (extend Project entity),
+> provenance fields on `cerefox_documents`, review status flag, web UI updates.
+
+---
+
+## Iteration 15: Local Supabase Dev Environment
 
 Set up a full local Supabase stack for offline development and Edge Function testing.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 13.1 | Set up Supabase local dev environment (`supabase start`) | Pending | Full local stack (Postgres+pgvector, Edge Functions runtime, GoTrue); configure `supabase/config.toml`; verify schema deploys and Edge Functions serve locally |
-| 13.2 | Test Edge Functions locally (`supabase functions serve`) | Pending | Verify cerefox-search, cerefox-ingest, cerefox-mcp work against local Postgres |
+| 15.1 | Set up Supabase local dev environment (`supabase start`) | Pending | Full local stack (Postgres+pgvector, Edge Functions runtime, GoTrue); configure `supabase/config.toml`; verify schema deploys and Edge Functions serve locally |
+| 15.2 | Test Edge Functions locally (`supabase functions serve`) | Pending | Verify cerefox-search, cerefox-ingest, cerefox-mcp work against local Postgres |
 
 **Deliverable**: Local Supabase dev environment operational for Edge Function development
 and testing without requiring the remote Supabase instance.
@@ -580,9 +702,10 @@ and testing without requiring the remote Supabase instance.
 
 ## Current Focus
 
-**Iteration 11 complete.** Metadata overhaul (11.1–11.16) done. OAuth (11.17), Perplexity
-(11.18), and Gemini (11.19) researched — research docs in `docs/research/`. Gemini testing
-deferred to a future session.
+**Iteration 12 complete.** Small-to-big retrieval, document versioning (chunks-anchored),
+full retrieval API (get_document, list_versions), 6 Edge Functions deployed, DB security
+(RLS + search_path pinning), migration tooling, and backup fixes all done.
 
-**Iteration 12 next**: True small-to-big retrieval — chunk-level results with N neighbor
-chunks for large documents, deduped and assembled in order.
+**Iteration 13 next**: Metadata-filtered search (13A) across all access paths, plus
+knowledge architecture research (13B) — edges/graph model, context bundles, agent provenance.
+Create feature branch `feat/metadata-filter` before starting implementation.

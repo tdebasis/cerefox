@@ -435,6 +435,209 @@ A configurable byte budget is applied after RPC results are returned, dropping w
 
 Note: `cerefox_get_document` is exempt from this limit when called directly (it is a single-document retrieval, not a multi-document search). The size limit applies to `cerefox_search` result assembly only.
 
+### 5.5 Metadata-Filtered Search
+
+Metadata filtering lets callers narrow search results to documents whose `doc_metadata` JSONB
+field contains a specific set of key-value pairs, in addition to the normal FTS + vector
+ranking. It is a **hard filter** (applied before ranking, not a scoring signal) and is
+orthogonal to — and composable with — the project filter and all three search modes (hybrid,
+FTS, semantic).
+
+#### Design rationale
+
+`cerefox_documents.doc_metadata` is an open-ended JSONB column. Users and agents add
+structured metadata at ingest time (e.g. `{"type": "decision", "project": "cerefox",
+"status": "active"}`). Without a filter, agents must retrieve documents and post-filter
+client-side. A server-side filter:
+
+- narrows the candidate pool **before** scoring — fewer rows for the vector index to evaluate
+- uses the existing `GIN(metadata)` index on `cerefox_documents` — no new schema changes
+- returns only relevant documents, reducing token consumption in the agent's context window
+- enables workflows like "search for decisions only" or "find all documents tagged research"
+
+#### Filter semantics — JSONB containment (`@>`)
+
+The filter is expressed as a JSON object. A document matches when its `doc_metadata` **contains
+all** of the specified key-value pairs:
+
+```
+p_metadata_filter = '{"type": "decision", "status": "active"}'
+
+Matches:  {"type": "decision", "status": "active", "project": "cerefox"}
+Matches:  {"type": "decision", "status": "active"}
+No match: {"type": "decision"}               -- missing "status"
+No match: {"type": "note", "status": "active"}  -- wrong value for "type"
+```
+
+The PostgreSQL `@>` containment operator is used directly:
+
+```sql
+AND (p_metadata_filter IS NULL OR d.doc_metadata @> p_metadata_filter)
+```
+
+When `p_metadata_filter` is `NULL` (omitted), the filter clause is vacuously true and
+behaviour is identical to today — no regression.
+
+The `GIN(metadata)` index supports `@>` natively, so filtering over large document sets
+is efficient even before any vector ranking occurs.
+
+#### SQL: changes to search RPCs
+
+A new optional parameter `p_metadata_filter JSONB DEFAULT NULL` is added to all four
+search RPCs. The WHERE clause in each RPC gains one line:
+
+```sql
+-- cerefox_hybrid_search, cerefox_fts_search, cerefox_semantic_search, cerefox_search_docs
+AND (p_metadata_filter IS NULL OR d.doc_metadata @> p_metadata_filter)
+```
+
+No new RPC is created. No schema migration is needed (GIN index already exists).
+`db_deploy.py` re-creates all RPCs from `rpcs.sql` on every run — adding the parameter and
+WHERE clause is sufficient.
+
+Affected RPCs:
+
+| RPC | Change |
+|-----|--------|
+| `cerefox_hybrid_search` | Add `p_metadata_filter JSONB DEFAULT NULL`; add `@>` filter |
+| `cerefox_fts_search` | Same |
+| `cerefox_semantic_search` | Same |
+| `cerefox_search_docs` | Same (the primary search path for agents via `cerefox_search` tool) |
+
+#### Layer-by-layer propagation (single-implementation principle)
+
+Every access path passes the filter as an opaque JSON object down to the RPC. No filtering
+logic is duplicated in Python or TypeScript.
+
+```
+Caller                   Access path              RPC call
+──────                   ───────────              ────────
+Agent (MCP)          →   cerefox-mcp              delegates to cerefox-search
+                     →   cerefox-search Edge Fn   .rpc("cerefox_search_docs", { p_metadata_filter: {...} })
+GPT Action           →   cerefox-search Edge Fn   same
+Python CLI           →   search.py                client.search_docs(metadata_filter={...})
+                     →   client.py                supabase.rpc("cerefox_search_docs", ...)
+Web UI               →   /search route            calls client.search_docs(metadata_filter=...)
+```
+
+**`cerefox-search` Edge Function** — accepts an optional `metadata_filter` field in the
+request body (JSON object or null). Passes it as `p_metadata_filter` to the RPC. No filter
+logic in TypeScript.
+
+**`cerefox-mcp` Edge Function** — the `cerefox_search` tool schema gains an optional
+`metadata_filter` parameter (`object`, nullable). Passed through to `cerefox-search` in the
+internal fetch body. No other changes.
+
+**Local MCP server (`mcp_server.py`)** — `cerefox_search` tool schema gains an optional
+`metadata_filter` input property (JSON object). Passed to `client.search_docs()`.
+
+**Python `search.py` / `client.py`** — `search_docs()` gains `metadata_filter: dict | None = None`.
+Serialises to JSON when calling the RPC. The `SearchResponse` dataclass is unchanged.
+
+**Python CLI (`cerefox search`)** — gains a `--filter` / `-f` option accepting a JSON string:
+`cerefox search "my query" --filter '{"type": "decision"}'`. Parsed with `json.loads()` and
+passed to `search_docs()`.
+
+#### Web UI: metadata filter in the Knowledge Browser
+
+The browser page (`/search` route + `browser.html`) gains a **Metadata Filter** section
+below the existing Project filter. It is collapsible (hidden by default, expanded when any
+filter is active) to keep the UI uncluttered for simple queries.
+
+**Filter UI design:**
+
+```
+┌─────────────────────────────────────────────────┐
+│  Search  [___________________________]  [Search] │
+│                                                  │
+│  Mode: ● Hybrid  ○ FTS  ○ Semantic  ○ Docs       │
+│                                                  │
+│  Project: [All projects ▼]                       │
+│                                                  │
+│  ▼ Metadata filter  (+ Add filter)               │
+│  ┌──────────────────────────────────────────┐   │
+│  │  Key [type_________▼]  Value [decision_] │ ✕ │
+│  │  Key [status_______▼]  Value [active___] │ ✕ │
+│  │  + Add filter row                         │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────┘
+```
+
+Implementation notes:
+
+- Key inputs are `<input>` elements with a `<datalist>` populated by
+  `cerefox_list_metadata_keys` (same autocomplete pattern as the ingest form).
+- Value inputs are free-text `<input>` elements.
+- "Add filter" adds a new key-value row via JavaScript (same pattern as the ingest/edit
+  metadata editor).
+- Each row has an ✕ button to remove it.
+- On form submit, the route collects paired `meta_filter_key[]` / `meta_filter_value[]`
+  arrays and assembles `{"key": "value", ...}`. Empty keys or values are ignored.
+- If all rows are empty/removed, `metadata_filter` is `None` — no filter applied.
+- The assembled filter is passed to `client.search_docs(metadata_filter=...)`.
+- Active filter state is preserved across HTMX partial refreshes (values survive in the form).
+
+**HTMX interaction**: the metadata filter section participates in the same HTMX search
+trigger as the rest of the form — filter changes trigger a search automatically (or on
+explicit submit, consistent with the existing UX).
+
+**Route changes** (`routes.py`):
+
+```python
+# In GET /search:
+meta_filter_keys   = request.query_params.getlist("meta_filter_key")
+meta_filter_values = request.query_params.getlist("meta_filter_value")
+metadata_filter = {
+    k: v for k, v in zip(meta_filter_keys, meta_filter_values) if k and v
+} or None
+
+results = await client.search_docs(
+    query=query,
+    project_id=project_id,
+    metadata_filter=metadata_filter,
+    ...
+)
+```
+
+#### OpenAPI schema update (GPT Actions)
+
+The `searchKnowledgeBase` operation in the GPT Actions schema gains a new optional request
+body field:
+
+```yaml
+metadata_filter:
+  type: object
+  additionalProperties:
+    type: string
+  description: >
+    Optional JSONB containment filter. Only documents whose metadata contains ALL
+    of the specified key-value pairs are returned. Example: {"type": "decision", "status": "active"}.
+    Omit or set to null to search all documents.
+```
+
+Schema version bumped from v1.3.1 → **v1.4.0** (new optional field, backwards-compatible).
+
+#### MCP tool description update
+
+The `cerefox_search` tool description gains a `metadata_filter` input field:
+
+```
+metadata_filter (optional object): JSONB containment filter.
+  Restricts results to documents whose metadata contains ALL specified key-value pairs.
+  Example: {"type": "decision", "status": "active"}
+  Use cerefox_list_metadata_keys first to discover available keys and values.
+  Omit to search all documents.
+```
+
+#### No changes needed
+
+- `cerefox-ingest` Edge Function — unchanged (filter is search-only)
+- `cerefox-mcp` for `cerefox_ingest` / `cerefox_get_document` / `cerefox_list_versions` / `cerefox_list_metadata_keys` — unchanged
+- Schema (SQL tables, indexes) — GIN index on `doc_metadata` already exists; no migration needed
+- `cerefox_expand_context` RPC — operates on pre-filtered chunk IDs, unaffected
+
+---
+
 ## 6. Ingestion Pipeline
 
 ### 6.1 Flow
