@@ -766,18 +766,21 @@ Migrated all remaining pages from Jinja2 to React with UX improvements.
 | 14B.4 | Migrate Document Ingest page | Done | Two-tab layout (Paste Content / Upload File), filename existence check, update-existing toggle, project + metadata assignment |
 | 14B.5 | Migrate Projects page | Done | List with create form, edit modal, delete with inline confirmation |
 | 14B.6 | Add dedicated Project Documents page | Done | `/projects/:id/documents` - clean table view, replaces broken browse-by-project-only search |
-| 14B.7 | Remove Jinja2 templates and dependencies | Pending | Jinja2 routes still serve the old UI; clean break once SPA is validated |
-| 14B.8 | Update Playwright e2e tests for new SPA | Pending | |
-| 14B.9 | Update all documentation referencing the web UI | Pending | |
+| 14B.7 | Remove Jinja2 SSR app, add root redirect to /app/ | Done | Removed routes.py, test_routes.py (83 tests), jinja2 dependency. Root shows redirect page. |
+| 14B.8 | Fix Vite base path for production SPA serving | Done | Set `base: '/app/'` in vite.config.ts so asset paths resolve correctly under FastAPI |
+| 14B.9 | Rewrite Playwright e2e tests for React SPA | Done | All UI tests updated for /app/ paths, Mantine selectors, React SPA structure |
+| 14B.10 | Update all documentation referencing the web UI | Pending | |
 
-**Deliverable**: Fully migrated SPA with all pages functional. Jinja2 templates still present
-pending removal.
+**Deliverable**: Fully migrated SPA. Jinja2 SSR removed. Root redirects to /app/.
+Templates kept on disk for reference.
 
 **Bug fixes during 14A/14B**:
 - Fixed `CerefoxClient` initialization in `deps.py`
 - Fixed `update_project` API call signature (dict, not positional args)
 - Fixed broken documents from failed embedding (check actual chunk count, not stored field)
 - Fixed search result links using React Router navigation (basename issue)
+- Fixed Vite base path for production SPA serving (assets 404)
+- Fixed Pydantic forward reference for project documents endpoint
 
 ### 14C: UI Polish and New Interaction Patterns
 
@@ -791,8 +794,7 @@ With the SPA foundation in place, add interaction patterns that the governance f
 | 14C.3 | Bulk operations UI (multi-select, bulk tag, bulk move to project) | Pending | |
 | 14C.4 | Dark mode support | Pending | |
 | 14C.5 | Toast notifications and optimistic updates | Pending | Improve perceived responsiveness |
-| 14C.6 | Remove Jinja2 templates, routes, and dependencies | Pending | Moved from 14B; clean break once SPA is fully validated |
-| 14C.7 | Update Playwright e2e tests for SPA | Pending | Moved from 14B |
+| 14C.6 | Delete Jinja2 template files from web/templates/ | Pending | routes.py and jinja2 dep already removed in 14B.7; templates kept on disk for reference |
 | 14C.8 | Update all docs referencing the web UI | Pending | Moved from 14B |
 
 **Deliverable**: A polished, modern UI ready for the governance features in Iteration 15.
@@ -841,10 +843,8 @@ collapsible version history with timestamps, Edit/Preview content toggle, two-ta
 (paste + file upload), dedicated project documents page, quick search from dashboard,
 two-step delete confirmations.
 
-Bug fixes: broken documents from failed embeddings (chunk existence check), React Router
-basename navigation, API call signatures.
+**Jinja2 SSR app removed.** Root (`/`) shows redirect page pointing to `/app/`. Old routes
+and templates deleted. `jinja2` dependency removed. Playwright e2e tests rewritten for SPA.
 
-**Jinja2 routes still coexist** for backward compatibility. Removal planned for 14C.
-
-**Next**: Iteration 14C (UI polish: diff view, dark mode, Jinja2 removal) or Iteration 15
+**Next**: Iteration 14C (UI polish: diff view, dark mode, template cleanup) or Iteration 15
 (audit log, attribution, review status) depending on priority.
