@@ -1,7 +1,4 @@
-"""Shared FastAPI dependency injection functions.
-
-Used by both the Jinja2 routes (routes.py) and the JSON API routes (routes_api.py).
-"""
+"""Shared FastAPI dependency injection functions for the JSON API."""
 
 from __future__ import annotations
 
