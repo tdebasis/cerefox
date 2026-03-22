@@ -23,11 +23,7 @@ def _cached_settings() -> Settings:
 
 @lru_cache(maxsize=1)
 def _cached_client() -> CerefoxClient:
-    settings = _cached_settings()
-    return CerefoxClient(
-        supabase_url=settings.supabase_url,
-        supabase_key=settings.supabase_key,
-    )
+    return CerefoxClient(_cached_settings())
 
 
 @lru_cache(maxsize=1)
