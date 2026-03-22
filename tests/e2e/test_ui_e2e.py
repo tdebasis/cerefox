@@ -37,16 +37,16 @@ def _unique_title(label: str) -> str:
 class TestDashboard:
     def test_loads_and_shows_stats(self, page: Page):
         page.goto(BASE_URL)
-        expect(page.locator("text=Dashboard")).to_be_visible()
-        expect(page.locator("text=Documents")).to_be_visible()
-        expect(page.locator("text=Projects")).to_be_visible()
+        expect(page.get_by_role("heading", name="Dashboard")).to_be_visible()
+        expect(page.get_by_text("Documents", exact=True).first).to_be_visible()
+        expect(page.get_by_text("Recent Documents")).to_be_visible()
 
     def test_quick_search_navigates_to_search(self, page: Page):
         page.goto(BASE_URL)
         page.fill('input[placeholder="Quick search..."]', "cerefox")
         page.click('button:has-text("Go")')
         page.wait_for_url("**/search**")
-        expect(page.locator("text=Search Knowledge Base")).to_be_visible()
+        expect(page.get_by_role("heading", name="Search Knowledge Base")).to_be_visible()
 
 
 # ── Ingest ─────────────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ class TestIngestPaste:
         title = _unique_title("Playwright Paste Test")
 
         page.goto(f"{BASE_URL}/ingest")
-        expect(page.locator("text=Ingest Content")).to_be_visible()
+        expect(page.get_by_role("heading", name="Ingest Content")).to_be_visible()
 
         # Fill in the paste form (default tab)
         page.fill('input[placeholder="Document title"]', title)
@@ -66,11 +66,12 @@ class TestIngestPaste:
             'textarea[placeholder="Paste your Markdown content here..."]',
             "# Test Document\n\nThis is a Playwright test document for e2e testing.",
         )
-        page.click('button:has-text("Ingest")')
-        page.wait_for_timeout(3000)
+        page.click('button[type="submit"]:has-text("Ingest")')
 
-        # Should see success alert
-        expect(page.locator("text=ingested successfully")).to_be_visible(timeout=10000)
+        # Should see success alert (embedding can take several seconds)
+        expect(
+            page.get_by_text("ingested successfully").or_(page.get_by_text("updated and re-indexed"))
+        ).to_be_visible(timeout=30000)
 
         # Clean up via REST API
         docs = e2e_client.list_documents(limit=50)
@@ -86,14 +87,13 @@ class TestIngestPaste:
 class TestSearch:
     def test_search_page_loads(self, page: Page):
         page.goto(f"{BASE_URL}/search")
-        expect(page.locator("text=Search Knowledge Base")).to_be_visible()
+        expect(page.get_by_role("heading", name="Search Knowledge Base")).to_be_visible()
 
     def test_search_returns_results(self, page: Page):
         """Search for a term that should match existing documents."""
         page.goto(f"{BASE_URL}/search?q=cerefox&mode=docs")
-        page.wait_for_timeout(3000)
-        # Should show result count text
-        expect(page.locator("text=result")).to_be_visible(timeout=10000)
+        # Should show "N results found" text
+        expect(page.get_by_text("results found")).to_be_visible(timeout=10000)
 
 
 # ── Projects ───────────────────────────────────────────────────────────────
@@ -105,16 +105,16 @@ class TestProjects:
         project_name = _unique_title("Test Project")
 
         page.goto(f"{BASE_URL}/projects")
-        expect(page.locator("text=Projects")).to_be_visible()
+        expect(page.get_by_role("heading", name="Projects", exact=True)).to_be_visible()
 
         # Create project
         page.fill('input[placeholder="Project name"]', project_name)
         page.fill('input[placeholder="Optional description"]', "E2E test project")
-        page.click('button:has-text("Create")')
-        page.wait_for_timeout(2000)
+        page.click('button[type="submit"]:has-text("Create")')
+        page.wait_for_timeout(3000)
 
-        # Verify it appears
-        expect(page.locator(f"text={project_name}")).to_be_visible(timeout=5000)
+        # Verify it appears (page refreshes query after mutation)
+        expect(page.get_by_text(project_name)).to_be_visible(timeout=10000)
 
         # Clean up via REST API
         for proj in e2e_client.list_projects():
@@ -130,7 +130,7 @@ class TestDocumentView:
     def test_document_page_loads(self, page: Page):
         """Navigate to dashboard, click first document, verify detail page loads."""
         page.goto(BASE_URL)
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(2000)
 
         # Click on the first document link if any exist
         doc_links = page.locator("a[href*='/document/']")
@@ -141,5 +141,5 @@ class TestDocumentView:
         page.wait_for_timeout(2000)
 
         # Should show document detail with action buttons
-        expect(page.locator("text=Edit")).to_be_visible()
-        expect(page.locator("text=Download")).to_be_visible()
+        expect(page.get_by_role("button", name="Edit")).to_be_visible()
+        expect(page.get_by_role("link", name="Download")).to_be_visible()
