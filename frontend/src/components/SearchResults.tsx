@@ -10,6 +10,7 @@ import {
   Text,
 } from "@mantine/core";
 import { IconAlertCircle } from "@tabler/icons-react";
+import { useNavigate } from "react-router-dom";
 
 import type {
   ChunkSearchResult,
@@ -94,6 +95,7 @@ export function SearchResults({
 }
 
 function DocResults({ results }: { results: DocSearchResult[] }) {
+  const navigate = useNavigate();
   return (
     <Accordion variant="separated" multiple>
       {results.map((r) => (
@@ -103,11 +105,11 @@ function DocResults({ results }: { results: DocSearchResult[] }) {
               <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
                 <ScoreBadge score={r.best_score} />
                 <Anchor
-                  href={`/document/${r.document_id}`}
+                  href={`/app/document/${r.document_id}`}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/document/${r.document_id}`); }}
                   fw={600}
                   size="sm"
                   truncate
-                  onClick={(e) => e.stopPropagation()}
                 >
                   {r.doc_title || "Untitled"}
                 </Anchor>
@@ -156,6 +158,7 @@ function DocResults({ results }: { results: DocSearchResult[] }) {
 }
 
 function ChunkResults({ results }: { results: ChunkSearchResult[] }) {
+  const navigate = useNavigate();
   return (
     <Stack gap="sm">
       {results.map((r) => (
@@ -176,7 +179,8 @@ function ChunkResults({ results }: { results: ChunkSearchResult[] }) {
           </Group>
           <Group gap="xs" mb={8}>
             <ScoreBadge score={r.score} />
-            <Anchor href={`/document/${r.document_id}`} fw={600} size="sm">
+            <Anchor href={`/app/document/${r.document_id}`}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); navigate(`/document/${r.document_id}`); }} fw={600} size="sm">
               {r.doc_title || "Untitled"}
             </Anchor>
             {r.title && r.title !== r.doc_title && (
