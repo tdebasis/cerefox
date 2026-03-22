@@ -17,9 +17,11 @@ Cerefox is a **user-owned knowledge memory layer** — it stores, indexes, and s
 
 ### 1.0 What Cerefox Is — and Is Not
 
-**Cerefox is a user-owned knowledge memory layer.** It is the persistent, curated substrate that sits between the user and the AI tools they use — making knowledge searchable and writable by any AI agent, from anywhere, at any time.
+**Cerefox is a user-owned knowledge memory layer.** It is the persistent, curated substrate that sits between the user and the AI tools they use, making knowledge searchable and writable by any AI agent, from anywhere, at any time.
 
 The primary use case is **shared memory across AI agents**: knowledge written by one tool (Claude, ChatGPT, Cursor, or a custom agent) becomes immediately available to all others. This prevents context fragmentation and enables continuously evolving, agent-accessible knowledge.
+
+> For the full project vision, core principles, and future direction, see [`docs/research/vision.md`](research/vision.md).
 
 **Cerefox is not a note-taking app.** It has no rich editor, no backlinking UI, no graph view, and no mobile app for capture. Those problems are already solved by excellent tools (Obsidian, Bear, Notion, etc.). Cerefox is designed to work *alongside* them, not replace them.
 

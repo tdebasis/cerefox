@@ -2,9 +2,11 @@
 
 ## 1. System Overview
 
-Cerefox is a **user-owned knowledge memory layer** — a persistent, curated knowledge base that sits between the user and the AI tools they use. It is *not* a note-taking app; it is the shared memory substrate that multiple AI agents can read and write, owned and curated by the user.
+Cerefox is a **user-owned knowledge memory layer**: a persistent, curated knowledge base that sits between the user and the AI tools they use. It is *not* a note-taking app; it is the shared memory substrate that multiple AI agents can read and write, owned and curated by the user.
 
 The primary use case is **shared memory across AI agents**: knowledge written by one tool becomes immediately available to all others, preventing context fragmentation across sessions and AI tools.
+
+> For the full project vision, core principles, and future direction, see [`docs/research/vision.md`](../research/vision.md).
 
 **Layer model:**
 ```

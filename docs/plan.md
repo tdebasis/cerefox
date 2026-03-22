@@ -658,51 +658,26 @@ key-value pairs. Multiple pairs are ANDed. NULL filter = no restriction (backwar
 
 ---
 
-### 13B: Knowledge Architecture Research — Edges, Context Bundles & Provenance
+### 13B: Knowledge Architecture Research — Partial / Deferred
 
-**Goal**: produce a first-version spec for three related knowledge architecture capabilities
-so that a future implementation iteration can be planned from a solid design.
+**Status**: Partially superseded by the updated [Vision document](../research/vision.md),
+which now covers edges/graph model, context bundles, provenance, audit trail, review status,
+automated knowledge processing, and multi-agent coordination in detail. The vision doc
+is the authoritative source for the direction of these capabilities.
 
-These are research and design tasks, not implementation. Outcomes: a spec section in
-`solution-design.md` (or dedicated `docs/specs/` files) that captures the data model,
-API shape, and phased rollout plan for each capability.
-
-| # | Task | Status | Notes |
-|---|------|--------|-------|
-| 13.R1 | **Research: Document Edges / Graph model** — spec the `cerefox_edges` table (source_doc_id, target_doc_id, edge_type, weight, created_by, created_at); define edge type vocabulary (summarizes, supersedes, related_to, depends_on, decided_by, open_question); design RPC for edge creation, traversal, and bundle assembly; evaluate GraphRAG integration path | Pending | Output: §13 in `solution-design.md` or `docs/specs/edges.md` |
-| 13.R2 | **Research: Context Bundles** — evaluate the three options from the Vision doc (extend Project, separate Bundle entity, graph-traversal assembly); define Phase 1 data model (bundle_type + manifest on Project entity); design bundle assembly API (`GET /bundle/{id}` → single Markdown payload with token budgeting); specify staleness detection and refresh semantics; define Session and Handoff bundle types | Pending | Output: §14 in `solution-design.md` or `docs/specs/bundles.md` |
-| 13.R3 | **Research: Agent Provenance & Activity Log** — design `created_by` / `updated_by` fields on `cerefox_documents` (human vs. agent name/model); design review status flag (`unreviewed` → `reviewed` / `rejected`); spec `cerefox_agent_writes` activity query (or view) surfacing recent agent writes; evaluate whether provenance is metadata-convention or a first-class schema field; design web UI "recent agent writes" view | Pending | Output: §15 in `solution-design.md` or `docs/specs/provenance.md` |
-
-**Deliverable**: Implementation-ready spec documents for edges, bundles, and provenance.
-These specs feed directly into a future Iteration 14 planning session.
-
----
-
-## Iteration 14: Knowledge Architecture Implementation
-
-> **Planned after Iteration 13B research.** Tasks TBD based on spec outputs from 13.R1–13.R3.
-> Expected scope: `cerefox_edges` table + RPCs, Phase 1 Context Bundles (extend Project entity),
-> provenance fields on `cerefox_documents`, review status flag, web UI updates.
-
----
-
-## Iteration 15: Local Supabase Dev Environment
-
-Set up a full local Supabase stack for offline development and Edge Function testing.
+**Original goal**: produce a first-version spec for three related knowledge architecture
+capabilities. The vision document now provides the conceptual framework; detailed specs
+will be produced during implementation planning (Iteration 14+).
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 15.1 | Set up Supabase local dev environment (`supabase start`) | Pending | Full local stack (Postgres+pgvector, Edge Functions runtime, GoTrue); configure `supabase/config.toml`; verify schema deploys and Edge Functions serve locally |
-| 15.2 | Test Edge Functions locally (`supabase functions serve`) | Pending | Verify cerefox-search, cerefox-ingest, cerefox-mcp work against local Postgres |
-
-**Deliverable**: Local Supabase dev environment operational for Edge Function development
-and testing without requiring the remote Supabase instance.
+| 13.R1 | **Research: Document Edges / Graph model** | Deferred | Aspirational/long-term; direction captured in vision doc (Search and Retrieval Evolution > Graph-Augmented Retrieval) |
+| 13.R2 | **Research: Context Bundles** | Deferred | Direction captured in vision doc (Context Packaging); depends on LLM integration pattern |
+| 13.R3 | **Research: Agent Provenance & Activity Log** | Partial | Direction refined in vision doc (Provenance, Trust, and Governance); audit trail, review status, and attribution detailed there; implementation spec still needed |
 
 ---
 
----
-
-## Iteration 13C: Response Size Limits Redesign
+### 13C: Response Size Limits Redesign
 
 **Goal**: Fix a regression where web UI search was being truncated by the MCP response limit,
 and redesign limits to be opt-in per call rather than always applied.
@@ -741,11 +716,118 @@ respect a configurable budget with server-ceiling enforcement. Full guide in
 
 ---
 
+## Iteration 14: Web Application Refactor (SPA)
+
+**Goal**: Replace the Jinja2 + HTMX server-rendered frontend with a modern single-page
+application (React + TypeScript) backed by the existing FastAPI API. This creates the
+foundation for the richer UI workflows described in the
+[Vision document](../research/vision.md) (review status, version promotion, audit log
+browsing, temporal queries).
+
+**Architecture**:
+- **Backend**: FastAPI stays as the API server. Existing routes become a clean JSON API
+  (the Jinja2 template rendering is removed). All business logic and Supabase integration
+  remain in Python.
+- **Frontend**: React + TypeScript SPA, served as static assets. Communicates with the
+  FastAPI backend via JSON API calls.
+- **Deployment**: FastAPI serves the built SPA assets in production (single process).
+  Development uses a separate dev server with hot reload proxying to the API.
+
+**Phased approach**: each phase is self-contained and deployable.
+
+### 14A: React App Skeleton + Search Page
+
+Set up the React project, build pipeline, development workflow, and migrate the first
+(and most important) page: Search.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 14A.1 | Initialize React + TypeScript project (Vite or Next.js static export) | Pending | Under `web/` or `frontend/`; configure TypeScript, ESLint, Prettier |
+| 14A.2 | Set up build pipeline: `npm run build` outputs to a static directory; FastAPI serves it | Pending | Production: `StaticFiles` mount; Dev: Vite proxy to `localhost:8000/api` |
+| 14A.3 | Convert existing FastAPI routes to JSON API endpoints (add `/api/` prefix) | Pending | Keep Jinja2 routes temporarily for pages not yet migrated; both coexist during transition |
+| 14A.4 | Choose and set up UI component library | Pending | Evaluate: shadcn/ui, Mantine, or Chakra UI; must support responsive + dark mode |
+| 14A.5 | Implement app shell: navigation, layout, responsive sidebar/header | Pending | Route structure mirroring current pages: dashboard, search, browse, document detail |
+| 14A.6 | Migrate Search page to React | Pending | All 4 search modes (docs, hybrid, FTS, semantic); mode selector; collapsible results with Full/Excerpt badges; metadata display; project and metadata filter controls |
+| 14A.7 | Update development docs and `CLAUDE.md` with new frontend workflow | Pending | `npm install`, `npm run dev`, build commands, project structure |
+| 14A.8 | Tests: verify search page works end-to-end against the JSON API | Pending | Playwright or Vitest + React Testing Library |
+
+**Deliverable**: Working React app with search page at feature parity with the current
+Jinja2 search. Both old and new UIs coexist during migration.
+
+### 14B: Migrate Remaining Pages
+
+Migrate all remaining pages from Jinja2 to React, one by one. Remove Jinja2 templates
+and dependencies once all pages are migrated.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 14B.1 | Migrate Dashboard page (project tiles, document count, recent activity) | Pending | |
+| 14B.2 | Migrate Document Detail page (content view, metadata, chunks, versions, download) | Pending | Key page for future review/governance workflows |
+| 14B.3 | Migrate Document Ingest page (file upload, paste, metadata editor) | Pending | Dynamic metadata key/value editor with autocomplete |
+| 14B.4 | Migrate Browse/Project view | Pending | |
+| 14B.5 | Remove Jinja2 templates, `jinja2` and `python-multipart` dependencies | Pending | Clean break once all pages are migrated |
+| 14B.6 | Update Playwright e2e tests for new SPA | Pending | |
+| 14B.7 | Update all documentation referencing the web UI | Pending | |
+
+**Deliverable**: Fully migrated SPA. Jinja2 templates removed. All pages responsive and
+visually polished.
+
+### 14C: UI Polish and New Interaction Patterns
+
+With the SPA foundation in place, add interaction patterns that the governance features
+(Iteration 15) will need.
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 14C.1 | Version history viewer with diff view (side-by-side or inline) | Pending | Needed for review status workflow; show what changed between versions |
+| 14C.2 | Inline document editing (Markdown editor component) | Pending | For correcting agent-written content without download/re-upload cycle |
+| 14C.3 | Bulk operations UI (multi-select, bulk tag, bulk move to project) | Pending | |
+| 14C.4 | Dark mode support | Pending | |
+| 14C.5 | Toast notifications and optimistic updates | Pending | Improve perceived responsiveness |
+
+**Deliverable**: A polished, modern UI ready for the governance features in Iteration 15.
+
+---
+
+## Iteration 15: Audit Log, Attribution, and Review Status
+
+**Goal**: Implement the trust and governance primitives described in the
+[Vision document](../research/vision.md): immutable audit log, author attribution,
+review status workflow, and temporal queries. Built on top of the React SPA from
+Iteration 14.
+
+**Scope** (high-level, detailed tasks during planning):
+
+- **Audit log**: immutable, append-only table recording all write operations. Structured
+  fields: who, when, what (operation type), size delta, description, version reference.
+  Auto-generated descriptions for system-driven actions. Searchable via temporal and
+  author queries, excluded from default search results.
+- **Attribution**: `created_by` / `updated_by` fields on `cerefox_documents` (schema-level,
+  not JSONB). Human vs. agent identity (name/model).
+- **Review status**: schema-level `review_status` field on documents. Human-written docs
+  start as `approved`; agent-revised docs marked `pending-review`. Content remains
+  searchable in both states. Web UI: review, approve, promote previous version, archive
+  individual versions.
+- **Version retention policy**: two modes (time-limited with archival exceptions, or fully
+  immutable). Audit entries persist regardless of version cleanup.
+- **Temporal queries**: "what changed since timestamp X", "what did agent Y write" --
+  supports multi-agent coordination catch-up and audit workflows.
+- **Web UI**: audit log browser (filterable by author, date, operation type), review
+  status indicators on document cards, inline approve/reject actions, version promotion UI.
+
+**Deliverable**: Full trust and governance layer. Agents write freely, human monitors via
+the web UI with full audit trail and lightweight review workflow.
+
+---
+
 ## Current Focus
 
-**Iterations 13A and 13C complete.** Metadata-filtered search across all access paths.
+**Iterations 13A, 13C, and 13D complete.** Metadata-filtered search across all access paths.
 Response size limits redesigned to be opt-in per call. Documents (full) search UI redesigned
 with collapsible content and Full/Excerpt badges; set as default search mode.
 
-**Next**: Iteration 13B knowledge architecture research (edges/graph model, context bundles,
-agent provenance).
+**Vision document** updated and refined (`docs/research/vision.md`). Iteration 13B research
+partially superseded by vision doc.
+
+**Next**: Iteration 14 -- web application refactor (React + TypeScript SPA). Starting with
+14A: project skeleton, build pipeline, and search page migration.

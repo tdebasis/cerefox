@@ -91,6 +91,12 @@ These are "input adapters" — Cerefox is the backend, these tools are the autho
 - [ ] **Validate Docker/local deployment** — `Dockerfile` and `docker-compose.yml` have never been
   tested end-to-end. Verify the local stack (Postgres+pgvector + web UI) works with the current
   cloud-only embedder config. Low priority — focus is on Supabase production environment.
+- [ ] **Local Supabase dev environment** — set up a full local Supabase stack for offline
+  development and Edge Function testing. Tasks: (1) `supabase start` with `supabase/config.toml`
+  configured for Postgres+pgvector, Edge Functions runtime, GoTrue; verify schema deploys and
+  Edge Functions serve locally. (2) Test `cerefox-search`, `cerefox-ingest`, `cerefox-mcp`
+  against local Postgres via `supabase functions serve`. (Previously planned as Iteration 15,
+  moved to backlog.)
 
 ### Backup & Sync
 - [ ] Scheduled automatic backups

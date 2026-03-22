@@ -2,9 +2,11 @@
 
 ## What Is This
 
-Cerefox is a personal "second brain" knowledge base. It stores markdown notes, thoughts, and ideas in Supabase (Postgres + pgvector), supports hybrid search (FTS + semantic), and exposes everything via MCP so any AI agent can query it.
+Cerefox is a user-owned knowledge memory layer for AI agents. It stores curated Markdown documents in Supabase (Postgres + pgvector), supports hybrid search (FTS + semantic), and exposes everything via MCP and REST so any AI agent can read and write.
 
-Single-user, open-source (Apache 2.0), designed to be cheap/free to operate.
+Cerefox is **asynchronous shared memory, not a message bus**. It solves the persistent context problem: knowledge written in one context is findable in any other, dissolving boundaries between agents, sessions, human and machine, and across time. It does not handle real-time agent-to-agent communication; protocols like A2A handle that. Cerefox handles persistent memory.
+
+Single-user, open-source (Apache 2.0), designed to be cheap/free to operate. See `docs/research/vision.md` for the full project vision.
 
 ## Tech Stack
 

@@ -4,7 +4,7 @@
 
 # Cerefox
 
-**User-owned shared memory for AI agents** — a persistent, curated knowledge layer that multiple AI tools can read and write, backed by Postgres + pgvector.
+**User-owned shared memory for AI agents.** A persistent, curated knowledge layer that multiple AI tools can read and write, backed by Postgres + pgvector.
 
 [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://python.org)
@@ -13,16 +13,21 @@
 
 ## What is Cerefox?
 
-Cerefox is a **user-owned knowledge memory layer** — a persistent, curated knowledge base that sits between you and the AI tools you use.
+Cerefox is a **user-owned knowledge memory layer**: a persistent, curated knowledge base that sits between you and the AI tools you use.
 
-The primary use case is **shared memory across AI agents**: knowledge written by one tool (Claude, ChatGPT, Cursor, or a custom agent) becomes immediately available to all others. This prevents context fragmentation — the same information doesn't have to be re-explained in every session.
+The primary use case is **shared memory across AI agents**: knowledge written by one tool (Claude, ChatGPT, Cursor, or a custom agent) becomes immediately available to all others. This prevents context fragmentation, so the same information doesn't have to be re-explained in every session.
 
-- **Agent-first, not human-first** — AI agents are first-class citizens on both sides: they read *and* write; humans curate and validate
-- **Own your data** — everything lives in a Postgres database you control (Supabase free tier or self-hosted)
-- **Not a note-taking app** — Cerefox is knowledge *infrastructure*, not a replacement for Obsidian, Notion, or Bear; those tools handle authoring, Cerefox handles indexing and agent access
-- **Hybrid search** — full-text + semantic search finds relevant knowledge even with fuzzy or conceptual queries
-- **Any agent, anywhere** — remote MCP via Supabase Edge Functions; ChatGPT via Custom GPT + GPT Actions
-- **Keep it cheap** — Supabase free tier + low-cost cloud embeddings; see `docs/guides/operational-cost.md`
+Cerefox is **asynchronous shared memory, not a message bus**. It solves the persistent context problem: knowledge written in one context is findable in any other. A user curates project documents and an AI agent discovers them through search without being told they exist. An agent writes a decision during a coding session and a different agent, on a different machine, running a different model, finds it days later. A user switches from one AI tool to another and the accumulated knowledge carries over without manual transfer. The boundaries that Cerefox dissolves are between agents, between sessions, between human and machine, and across time.
+
+> For the full project vision, principles, and roadmap direction, see [`docs/research/vision.md`](docs/research/vision.md).
+
+- **Agent-first, not human-first**: AI agents are first-class citizens on both sides: they read *and* write; humans curate and validate
+- **Own your data**: everything lives in a Postgres database you control (Supabase free tier or self-hosted)
+- **Cross-agent coordination**: agents on separate machines and runtimes coordinate through persistent shared context (see `docs/guides/agent-coordination.md`)
+- **Not a note-taking app**: Cerefox is knowledge *infrastructure*, not a replacement for Obsidian, Notion, or Bear; those tools handle authoring, Cerefox handles indexing and agent access
+- **Hybrid search**: full-text + semantic search finds relevant knowledge even with fuzzy or conceptual queries
+- **Any agent, anywhere**: remote MCP via Supabase Edge Functions; ChatGPT via Custom GPT + GPT Actions
+- **Keep it cheap**: Supabase free tier + low-cost cloud embeddings; see `docs/guides/operational-cost.md`
 
 ---
 
@@ -217,7 +222,8 @@ Full setup for all options: `docs/guides/connect-agents.md`
 | `docs/guides/setup-supabase.md` | Supabase project setup |
 | `docs/guides/configuration.md` | All configuration options |
 | `docs/guides/connect-agents.md` | MCP agent integration |
-| `docs/guides/response-limits.md` | Response size limits — per-path behaviour and tuning |
+| `docs/guides/agent-coordination.md` | Multi-agent coordination patterns and best practices |
+| `docs/guides/response-limits.md` | Response size limits: per-path behaviour and tuning |
 | `docs/guides/access-paths.md` | All access layers, credentials, and integration paths |
 | `docs/guides/setup-local.md` | Local Docker setup |
 | `docs/guides/ops-scripts.md` | Backup, restore, migrate, sync docs |
