@@ -25,6 +25,7 @@ import { fetchDocument, fetchChunks, deleteDocument, getDownloadUrl } from "../a
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useProjects } from "../hooks/useProjects";
 import { formatDateTime } from "../utils/dates";
+import { showSuccess, showError } from "../utils/notifications";
 
 export function DocumentPage() {
   const { id } = useParams<{ id: string }>();
@@ -51,8 +52,10 @@ export function DocumentPage() {
     mutationFn: () => deleteDocument(id!),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      showSuccess("Document deleted");
       navigate("/");
     },
+    onError: (err) => showError("Delete failed", String(err)),
   });
 
   if (isLoading) {

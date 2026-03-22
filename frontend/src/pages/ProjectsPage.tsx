@@ -22,6 +22,7 @@ import {
   updateProject,
 } from "../api/projects";
 import { useProjects } from "../hooks/useProjects";
+import { showSuccess, showError } from "../utils/notifications";
 
 export function ProjectsPage() {
   const queryClient = useQueryClient();
@@ -43,9 +44,11 @@ export function ProjectsPage() {
     mutationFn: () => createProject(newName.trim(), newDesc.trim()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      showSuccess("Project created");
       setNewName("");
       setNewDesc("");
     },
+    onError: (err) => showError("Create failed", String(err)),
   });
 
   const updateMutation = useMutation({
@@ -53,16 +56,20 @@ export function ProjectsPage() {
       updateProject(editId!, editName.trim(), editDesc.trim()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      showSuccess("Project updated");
       setEditId(null);
     },
+    onError: (err) => showError("Update failed", String(err)),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteProject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      showSuccess("Project deleted");
       setConfirmDeleteId(null);
     },
+    onError: (err) => showError("Delete failed", String(err)),
   });
 
   const openEdit = (project: { id: string; name: string; description: string | null }) => {
