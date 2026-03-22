@@ -761,7 +761,9 @@ def api_update_project(
 ) -> ProjectResponse:
     """Update a project's name and description."""
     try:
-        result = client.update_project(project_id, body.name.strip(), body.description.strip())
+        result = client.update_project(
+            project_id, {"name": body.name.strip(), "description": body.description.strip()}
+        )
         return ProjectResponse(
             id=result["id"],
             name=result["name"],
