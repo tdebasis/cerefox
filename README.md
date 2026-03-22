@@ -41,7 +41,7 @@ Cerefox is **asynchronous shared memory, not a message bus**. It solves the pers
 | **Cloud embeddings** | OpenAI `text-embedding-3-small` (768-dim) via API — or swap to Fireworks AI |
 | **Remote MCP endpoint** | `cerefox-mcp` Supabase Edge Function — MCP Streamable HTTP; connect Claude Desktop, Claude Code, or Cursor with just a URL and anon key; no Python install needed |
 | **Local MCP server (legacy)** | `cerefox mcp` stdio server — fallback for offline use or development; requires Python + uv + local clone |
-| **Web UI** | FastAPI + Jinja2 + HTMX dashboard for browsing, searching, and ingesting |
+| **Web UI** | React + TypeScript SPA (Mantine UI) at `/app/`; FastAPI JSON API backend; Markdown viewer, search with 4 modes, document editing, project management |
 | **Multi-format ingest** | `.md`, `.txt`, `.pdf` (pypdf), `.docx` (python-docx) |
 | **Batch ingest** | `cerefox ingest-dir` recurses directories |
 | **Deduplication** | SHA-256 content hash; re-ingesting the same file is a no-op |

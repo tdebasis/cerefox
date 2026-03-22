@@ -914,23 +914,29 @@ $$;
 
 ### 9.1 Technology Choice
 
-FastAPI + Jinja2 + HTMX for a lightweight, interactive web UI with no JavaScript build step.
+React + TypeScript SPA (Mantine UI, TanStack Query, React Router) served by FastAPI at `/app/`.
+FastAPI provides the JSON API backend at `/api/v1/`.
 
 Rationale:
-- FastAPI is already used for the API layer
-- Jinja2 templates are simple and maintainable
-- HTMX provides interactivity (search-as-you-type, partial page updates) without a JS framework
-- Can be deployed locally or on Cloud Run with minimal config
+- FastAPI is already used for the API layer and MCP integration
+- React SPA provides the interactive UI needed for governance workflows (review status, version promotion, audit log browsing)
+- Mantine UI provides a comprehensive component library with responsive layout and dark mode support
+- TanStack Query handles data fetching, caching, and cache invalidation
+- Vite handles the build pipeline with fast HMR during development
+- Production: FastAPI serves the built SPA as static assets (single process deployment)
+
+The original Jinja2 + HTMX stack (v0.1.0-v0.1.6) was replaced in Iteration 14.
+See `docs/specs/ui-redesign-spa-python-api.md` for the migration design document.
 
 ### 9.2 Pages/Features
 
-1. **Dashboard**: recent documents, ingestion status, project counts
-2. **Knowledge Browser**: search and navigate stored content by project, tags, date
-3. **Document Viewer**: view a document with its chunks highlighted; link to version history
-4. **Version History**: list previous versions for a document; view diff; trigger restore
-5. **Ingest**: upload markdown files or paste content
-6. **Projects/Metadata**: manage projects, view/edit metadata schema
-7. **Status**: ingestion queue, errors, system health
+1. **Dashboard** (`/app/`): stat cards, recent documents table, projects table with doc counts, quick search
+2. **Search** (`/app/search`): 4 search modes (docs, hybrid, FTS, semantic), project and metadata filters, Markdown content accordion with Full/Excerpt badges
+3. **Document Detail** (`/app/document/:id`): Markdown viewer with Rendered/Raw toggle, collapsible version history, metadata accordion, chunks view, edit/download/delete actions
+4. **Document Edit** (`/app/document/:id/edit`): Edit/Preview content toggle, multi-select projects, dynamic metadata key/value editor
+5. **Ingest** (`/app/ingest`): two-tab layout (Paste Content / Upload File), project and metadata assignment, filename existence check
+6. **Projects** (`/app/projects`): project list with create form, edit modal, delete with confirmation
+7. **Project Documents** (`/app/projects/:id/documents`): document listing for a specific project
 
 ## 10. MCP Integration
 

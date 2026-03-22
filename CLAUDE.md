@@ -13,8 +13,8 @@ Single-user, open-source (Apache 2.0), designed to be cheap/free to operate. See
 - **Language**: Python 3.11+
 - **Database**: PostgreSQL 16+ with pgvector (Supabase free tier or local Docker)
 - **Embeddings**: OpenAI `text-embedding-3-small` (768-dim, cloud API); Fireworks AI as alternative; Edge Functions handle embedding server-side for agents
-- **Web framework**: FastAPI (API + web UI backend)
-- **Web UI**: Jinja2 templates + HTMX (lightweight, no JS build step)
+- **Web framework**: FastAPI (JSON API backend)
+- **Web UI**: React + TypeScript SPA (Mantine UI, TanStack Query, Vite); served at `/app/`
 - **CLI**: Click
 - **Package management**: uv (pyproject.toml)
 - **Testing**: pytest
@@ -52,12 +52,17 @@ cerefox/
 │       ├── backup/
 │       │   └── fs_backup.py       # File system / git backup
 │       ├── api/
-│       │   ├── app.py             # FastAPI application
-│       │   └── routes.py          # API endpoints
+│       │   ├── app.py             # FastAPI application factory
+│       │   ├── routes_api.py      # JSON API endpoints (/api/v1/)
+│       │   └── deps.py            # Shared dependency injection
 │       ├── mcp_server.py          # MCP stdio server (cerefox mcp)
 │       └── cli.py                 # CLI entry point
+├── frontend/                      # React + TypeScript SPA
+│   ├── src/                       # Components, pages, hooks, API client
+│   ├── vite.config.ts             # Vite build config (base: /app/)
+│   └── package.json
 ├── web/
-│   └── templates/                 # Jinja2 templates for web UI
+│   └── static/                    # Static assets (logo, favicon)
 ├── scripts/
 │   ├── db_deploy.py           # Deploy schema to Supabase/Postgres
 │   ├── db_migrate.py          # Apply schema migrations
