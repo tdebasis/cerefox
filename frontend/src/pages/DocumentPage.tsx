@@ -1,6 +1,5 @@
 import {
   Accordion,
-  Anchor,
   Badge,
   Button,
   Code,
@@ -23,7 +22,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
 import { fetchDocument, fetchChunks, deleteDocument, getDownloadUrl } from "../api/documents";
+import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useProjects } from "../hooks/useProjects";
+import { formatDateTime } from "../utils/dates";
 
 export function DocumentPage() {
   const { id } = useParams<{ id: string }>();
@@ -90,14 +91,16 @@ export function DocumentPage() {
             <Text size="sm" c="dimmed">
               {doc.chunk_count} chunks | {doc.total_chars.toLocaleString()} chars
             </Text>
+          </Group>
+          <Group gap="md" mt={4}>
             {doc.created_at && (
               <Text size="xs" c="dimmed">
-                Created {new Date(doc.created_at).toLocaleDateString()}
+                Created: {formatDateTime(doc.created_at)}
               </Text>
             )}
             {doc.updated_at && (
               <Text size="xs" c="dimmed">
-                Updated {new Date(doc.updated_at).toLocaleDateString()}
+                Updated: {formatDateTime(doc.updated_at)}
               </Text>
             )}
           </Group>
@@ -186,20 +189,50 @@ export function DocumentPage() {
           <Text size="sm" fw={500} mb="xs">
             Version History
           </Text>
-          <Group gap="xs" mb="md">
-            {doc.versions.map((v) => (
-              <Anchor
-                key={v.version_id}
-                href={getDownloadUrl(id!, v.version_id)}
-                size="xs"
-              >
-                <Badge variant="outline" size="sm">
-                  v{v.version_number} | {v.total_chars.toLocaleString()} chars |{" "}
-                  {new Date(v.created_at).toLocaleDateString()}
-                </Badge>
-              </Anchor>
-            ))}
-          </Group>
+          <Table mb="md" striped>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Version</Table.Th>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>Size</Table.Th>
+                <Table.Th>Chunks</Table.Th>
+                <Table.Th></Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {doc.versions.map((v) => (
+                <Table.Tr key={v.version_id}>
+                  <Table.Td>
+                    <Badge variant="outline" size="sm">
+                      v{v.version_number}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{formatDateTime(v.created_at)}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">
+                      {v.total_chars.toLocaleString()} chars
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm">{v.chunk_count}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Button
+                      variant="subtle"
+                      size="compact-xs"
+                      leftSection={<IconDownload size={12} />}
+                      component="a"
+                      href={getDownloadUrl(id!, v.version_id)}
+                    >
+                      Download
+                    </Button>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
         </>
       )}
 
@@ -213,12 +246,10 @@ export function DocumentPage() {
             </Text>
           </Accordion.Control>
           <Accordion.Panel>
-            <Code
-              block
-              style={{ whiteSpace: "pre-wrap", maxHeight: 600, overflow: "auto" }}
-            >
-              {doc.full_content || "(empty)"}
-            </Code>
+            <MarkdownViewer
+              content={doc.full_content}
+              defaultView="rendered"
+            />
           </Accordion.Panel>
         </Accordion.Item>
 

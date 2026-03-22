@@ -3,6 +3,7 @@ import {
   Container,
   Group,
   MultiSelect,
+  SegmentedControl,
   Stack,
   TextInput,
   Textarea,
@@ -17,6 +18,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { editDocument, fetchDocument } from "../api/documents";
+import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useMetadataKeys, useProjects } from "../hooks/useProjects";
 
 export function DocumentEditPage() {
@@ -40,6 +42,7 @@ export function DocumentEditPage() {
     [],
   );
   const [initialized, setInitialized] = useState(false);
+  const [contentView, setContentView] = useState<string>("edit");
 
   // Initialize form state from loaded document (once)
   if (doc && !initialized) {
@@ -190,15 +193,48 @@ export function DocumentEditPage() {
             </Stack>
           </div>
 
-          <Textarea
-            label="Content"
-            value={content}
-            onChange={(e) => setContent(e.currentTarget.value)}
-            minRows={15}
-            autosize
-            required
-            styles={{ input: { fontFamily: "monospace", fontSize: 13 } }}
-          />
+          <div>
+            <Group justify="space-between" mb="xs">
+              <Text size="sm" fw={500}>
+                Content
+              </Text>
+              <SegmentedControl
+                size="xs"
+                value={contentView}
+                onChange={setContentView}
+                data={[
+                  { label: "Edit", value: "edit" },
+                  { label: "Preview", value: "preview" },
+                ]}
+                w={160}
+              />
+            </Group>
+            {contentView === "edit" ? (
+              <Textarea
+                value={content}
+                onChange={(e) => setContent(e.currentTarget.value)}
+                minRows={15}
+                autosize
+                required
+                styles={{ input: { fontFamily: "monospace", fontSize: 13 } }}
+              />
+            ) : (
+              <div
+                style={{
+                  border: "1px solid var(--mantine-color-gray-3)",
+                  borderRadius: 8,
+                  padding: 12,
+                  minHeight: 300,
+                }}
+              >
+                <MarkdownViewer
+                  content={content}
+                  defaultView="rendered"
+                  maxHeight={500}
+                />
+              </div>
+            )}
+          </div>
 
           <Group>
             <Button type="submit" loading={mutation.isPending}>
