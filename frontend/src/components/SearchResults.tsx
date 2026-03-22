@@ -128,20 +128,16 @@ function DocResults({ results }: { results: DocSearchResult[] }) {
             </Group>
             <Group gap="xs" mt={4}>
               <Text size="xs" c="dimmed">
-                {r.chunk_count} chunks
-              </Text>
-              <Text size="xs" c="dimmed">
-                {r.total_chars.toLocaleString()} chars
+                {r.chunk_count} chunks | {r.total_chars.toLocaleString()} chars
               </Text>
               {r.doc_updated_at && (
                 <Text size="xs" c="dimmed">
-                  Updated{" "}
-                  {new Date(r.doc_updated_at).toLocaleDateString()}
+                  Updated {new Date(r.doc_updated_at).toLocaleDateString()}
                 </Text>
               )}
               {r.best_chunk_heading_path.length > 0 && (
-                <Text size="xs" c="dimmed">
-                  Best match: {r.best_chunk_heading_path.join(" > ")}
+                <Text size="xs" c="dimmed" fs="italic">
+                  {r.best_chunk_heading_path.join(" > ")}
                 </Text>
               )}
             </Group>
