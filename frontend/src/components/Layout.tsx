@@ -1,5 +1,4 @@
 import {
-  Anchor,
   AppShell,
   Group,
   Text,
@@ -9,12 +8,11 @@ import {
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const NAV_ITEMS = [
+  { label: "Dashboard", path: "/" },
   { label: "Search", path: "/search" },
-  // Links back to Jinja2 UI during transition period
-  { label: "Dashboard", href: "/" },
-  { label: "Ingest", href: "/ingest" },
-  { label: "Projects", href: "/projects" },
-] as const;
+  { label: "Ingest", path: "/ingest" },
+  { label: "Projects", path: "/projects" },
+];
 
 export function Layout() {
   const navigate = useNavigate();
@@ -32,39 +30,30 @@ export function Layout() {
               width={32}
               style={{ borderRadius: 4 }}
             />
-            <Title order={4} style={{ cursor: "pointer" }} onClick={() => navigate("/")}>
+            <Title
+              order={4}
+              style={{ cursor: "pointer" }}
+              onClick={() => navigate("/")}
+            >
               Cerefox
             </Title>
           </Group>
 
           <Group gap="lg">
-            {NAV_ITEMS.map((item) =>
-              "path" in item ? (
-                <UnstyledButton
-                  key={item.label}
-                  onClick={() => navigate(item.path)}
-                  style={{
-                    fontWeight:
-                      location.pathname === item.path ||
-                      (item.path === "/search" && location.pathname === "/")
-                        ? 700
-                        : 400,
-                  }}
-                >
-                  <Text size="sm">{item.label}</Text>
-                </UnstyledButton>
-              ) : (
-                <Anchor
-                  key={item.label}
-                  href={item.href}
+            {NAV_ITEMS.map((item) => (
+              <UnstyledButton
+                key={item.label}
+                onClick={() => navigate(item.path)}
+              >
+                <Text
                   size="sm"
-                  c="dimmed"
-                  underline="never"
+                  fw={location.pathname === item.path ? 700 : 400}
+                  c={location.pathname === item.path ? undefined : "dimmed"}
                 >
                   {item.label}
-                </Anchor>
-              ),
-            )}
+                </Text>
+              </UnstyledButton>
+            ))}
           </Group>
         </Group>
       </AppShell.Header>
