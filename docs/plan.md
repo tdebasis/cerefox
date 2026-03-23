@@ -813,8 +813,6 @@ governance workflows.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| # | Task | Status | Notes |
-|---|------|--------|-------|
 | 15A.1 | Create `cerefox_audit_log` table (immutable, append-only) | Done | Includes author_type ('user' | 'agent') for review_status auto-transition. Indexes for temporal, author, document, FTS on description. ON DELETE SET NULL for document_id and version_id FKs. |
 | 15A.2 | Add `review_status` column to `cerefox_documents` | Done | CHECK constraint: 'approved' | 'pending_review'. Default 'approved'. |
 | 15A.3 | Add `archived` boolean to `cerefox_document_versions` | Done | Default false. Protected versions skip retention cleanup. |
@@ -837,9 +835,9 @@ governance workflows.
 | 15B.4 | Add review status indicators to all document lists | Done | Green "Approved" / yellow "Pending" badges on dashboard, project documents. list_documents query updated to include review_status. |
 | 15B.5 | Add review status toggle to Document Detail page | Done | SegmentedControl with green/yellow color matching. Creates audit entry via API. |
 | 15B.6 | Add version archival toggle to Document Detail page | Done | Clickable badges: green "Yes (archived)" / yellow "No (will be deleted)" with tooltips. Unarchive requires confirmation. Lock icon on archived versions. |
-| 15B.7 | Version diff view (current vs specific version) | Done | "Diff" button per version row. Modal with unified and side-by-side modes. Uses `diff` npm package. Shows +added/-removed stats. |
+| 15B.7 | Version diff view (current vs specific version) | Done | "Diff" button per version row. Modal with unified diff view. Uses `diff` npm package. Shows +added/-removed stats. Side-by-side removed (alignment issues). |
 | 15B.8 | Inline document editing on detail page | Removed | Edit page with Edit/Preview toggle is sufficient. |
-| 15B.9 | Update MCP server and Edge Functions for audit log + review status | Done | cerefox_create_audit_entry RPC (single implementation). cerefox-ingest accepts author/author_type, sets review_status, creates audit entries via RPC. cerefox-mcp passes author="mcp-agent", author_type="agent". Python MCP server and web UI API routes set author/author_type appropriately. |
+| 15B.9 | Update MCP server and Edge Functions for audit log + review status | Done | cerefox_create_audit_entry RPC + cerefox_list_audit_entries RPC (single implementation). New cerefox-get-audit-log Edge Function. New cerefox_get_audit_log MCP tool. cerefox-ingest accepts author/author_type, sets review_status, creates audit entries via RPC. cerefox-mcp passes author (agent-provided or default "mcp-agent"), author_type="agent". |
 | 15B.10 | Update Playwright e2e tests for governance features | Done | Added review status toggle visibility test, audit log page load test. |
 | 15B.11 | Update documentation | Done | plan.md updated with all task statuses. |
 
@@ -859,10 +857,14 @@ and lightweight review workflow. Temporal queries support multi-agent coordinati
 ## Current Focus
 
 **Iteration 15 complete.** Full trust and governance layer implemented:
-- Audit log (immutable, append-only) with cerefox_create_audit_entry RPC
+- Audit log (immutable, append-only) with cerefox_create_audit_entry and cerefox_list_audit_entries RPCs
+- New cerefox-get-audit-log Edge Function + cerefox_get_audit_log MCP tool (7 Edge Functions, 7 MCP tools total)
 - Review status (approved/pending_review) with auto-transition based on author_type
 - Version archival (archived flag protects from cleanup)
-- Version diff viewer (unified and side-by-side)
+- Version diff viewer (unified)
 - Review status filter on search (docs mode)
+- Audit log shows document titles (SQL join in RPC)
+- Author pass-through: MCP agents can set their name via author parameter
 - Author/author_type wired through all access paths (web UI, MCP, Edge Functions)
+- Upgrading guide with links from README and quickstart
 - All 391 unit tests + 9 UI e2e tests pass

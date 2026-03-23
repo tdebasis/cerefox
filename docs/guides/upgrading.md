@@ -29,6 +29,7 @@ npx supabase functions deploy cerefox-ingest
 npx supabase functions deploy cerefox-metadata
 npx supabase functions deploy cerefox-get-document
 npx supabase functions deploy cerefox-list-versions
+npx supabase functions deploy cerefox-get-audit-log
 npx supabase functions deploy cerefox-mcp
 
 # 7. Restart the application
