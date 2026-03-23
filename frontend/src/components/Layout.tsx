@@ -1,10 +1,13 @@
 import {
+  ActionIcon,
   AppShell,
   Group,
   Text,
   Title,
   UnstyledButton,
+  useMantineColorScheme,
 } from "@mantine/core";
+import { IconMoon, IconSun } from "@tabler/icons-react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 
 const NAV_ITEMS = [
@@ -17,6 +20,8 @@ const NAV_ITEMS = [
 export function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme();
+  const dark = colorScheme === "dark";
 
   return (
     <AppShell header={{ height: 56 }} padding="md">
@@ -54,6 +59,14 @@ export function Layout() {
                 </Text>
               </UnstyledButton>
             ))}
+            <ActionIcon
+              variant="subtle"
+              size="lg"
+              onClick={toggleColorScheme}
+              title={dark ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {dark ? <IconSun size={18} /> : <IconMoon size={18} />}
+            </ActionIcon>
           </Group>
         </Group>
       </AppShell.Header>

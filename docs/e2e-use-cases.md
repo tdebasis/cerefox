@@ -23,7 +23,7 @@ after each run, even on failure.
 
 - **Supabase REST API tests**: Use credentials from `.env` (`CEREFOX_SUPABASE_URL`, `CEREFOX_SUPABASE_KEY`)
 - **Edge Function tests**: Need a JWT-format key. Set `CEREFOX_SUPABASE_ANON_KEY` in `.env` (the Supabase anon key from Dashboard > Settings > API). Skipped if not available.
-- **UI tests**: Require the web app to be running (`uv run uvicorn cerefox.api.app:app`)
+- **UI tests**: Require the web app running (`uv run uvicorn cerefox.api.app:app`) and frontend built (`cd frontend && npm run build`). Tests target the React SPA at `http://127.0.0.1:8000/app/`.
 
 ---
 
@@ -90,17 +90,18 @@ Two docs are ingested with different metadata; each test asserts only the matchi
 
 File: `tests/e2e/test_ui_e2e.py` — marker: `@pytest.mark.ui`
 
-Requires: web app running at `http://127.0.0.1:8000/`
+Requires: web app running at `http://127.0.0.1:8000/` and frontend built (`cd frontend && npm run build`).
+Tests target the React SPA at `/app/`.
 
 | Class | Test | Use Case | Status |
 |-------|------|----------|--------|
-| `TestDashboard` | `test_loads_and_shows_stats` | Dashboard renders with doc count, recent docs, and projects | Done |
-| `TestIngestPaste` | `test_paste_ingest_creates_document` | Paste content → submit → verify doc appears in search → cleanup | Done |
-| `TestSearch` | `test_search_page_loads` | Knowledge Browser page renders with search form | Done |
-| `TestSearch` | `test_fts_search_returns_results` | FTS search returns results with no error | Done |
-| `TestProjects` | `test_project_crud` | Create project via UI → verify in list → delete → verify gone | Done |
-| `TestDocumentView` | `test_document_page_loads` | Navigate from dashboard to a document detail page | Done |
-| `TestVersioningUI` | `test_upload_new_file_creates_version_row` | Upload a `.md` file → update with new file → verify version download link appears in UI | Done |
+| `TestDashboard` | `test_loads_and_shows_stats` | Dashboard renders with heading, doc/project counts, recent docs | Done |
+| `TestDashboard` | `test_quick_search_navigates_to_search` | Quick search input navigates to Search page with query | Done |
+| `TestIngestPaste` | `test_paste_ingest_creates_document` | Paste content via Ingest tab, verify success alert, cleanup | Done |
+| `TestSearch` | `test_search_page_loads` | Search page renders with heading | Done |
+| `TestSearch` | `test_search_returns_results` | Search query returns "results found" text | Done |
+| `TestProjects` | `test_project_crud` | Create project via UI form, verify it appears, cleanup | Done |
+| `TestDocumentView` | `test_document_page_loads` | Navigate from dashboard to document detail, verify Edit/Download buttons | Done |
 
 ### 7. MCP Server (future)
 

@@ -20,6 +20,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { editDocument, fetchDocument } from "../api/documents";
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useMetadataKeys, useProjects } from "../hooks/useProjects";
+import { showSuccess, showError } from "../utils/notifications";
 
 export function DocumentEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -76,9 +77,13 @@ export function DocumentEditPage() {
     onSuccess: (result) => {
       if (result.success) {
         queryClient.invalidateQueries({ queryKey: ["document", id] });
+        showSuccess("Document saved", result.reindexed ? "Content re-indexed" : "Metadata updated");
         navigate(`/document/${id}`);
+      } else if (result.error) {
+        showError("Save failed", result.error);
       }
     },
+    onError: (err) => showError("Save failed", String(err)),
   });
 
   const projectOptions =

@@ -102,31 +102,36 @@ def test_my_command():
 
 ## Adding a new web page
 
-Web routes are in `src/cerefox/api/routes.py`. Templates go in `web/templates/`.
+The web UI is a React + TypeScript SPA under `frontend/`. The backend JSON API is in
+`src/cerefox/api/routes_api.py`.
 
-1. Add a route handler:
+1. Add an API endpoint in `routes_api.py`:
 ```python
-@router.get("/mypage", response_class=HTMLResponse)
-def mypage(
-    request: Request,
+@api_router.get("/my-data")
+def api_my_data(
     client: CerefoxClient = Depends(get_client),
-    templates: Jinja2Templates = Depends(get_templates),
-):
-    ctx = {"active": "mypage", "data": client.get_something()}
-    return _render(templates, request, "mypage.html", ctx)
+) -> MyDataResponse:
+    return MyDataResponse(...)
 ```
 
-2. Create `web/templates/mypage.html`:
-```html
-{% extends "base.html" %}
-{% block title %}My Page — Cerefox{% endblock %}
-{% block content %}
-<h1>My Page</h1>
-{{ data }}
-{% endblock %}
+2. Add a TypeScript API function in `frontend/src/api/`:
+```typescript
+export async function fetchMyData(): Promise<MyData> {
+  return apiFetch<MyData>("/my-data");
+}
 ```
 
-3. Add a nav link in `web/templates/base.html`.
+3. Create a page component in `frontend/src/pages/MyPage.tsx` using Mantine components
+   and TanStack Query for data fetching.
+
+4. Add a route in `frontend/src/App.tsx`:
+```tsx
+<Route path="/my-page" element={<MyPage />} />
+```
+
+5. Add a nav link in `frontend/src/components/Layout.tsx` if needed.
+
+6. Build: `cd frontend && npm run build`
 
 ---
 

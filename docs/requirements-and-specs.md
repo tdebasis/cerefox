@@ -322,7 +322,7 @@ plain text snapshots for recovery purposes only.
 |----|-------------|
 | NFR-5.1 | Single-user system (no auth complexity in V1) |
 | NFR-5.2 | Minimal dependencies — prefer standard library when possible |
-| NFR-5.3 | Web UI has no JavaScript build step (Jinja2 + HTMX) |
+| NFR-5.3 | Web UI is a React + TypeScript SPA with a standard build step (`npm run build`); FastAPI serves the built output |
 | NFR-5.4 | Docker Compose for full local deployment |
 
 ### NFR-7: Documentation & Onboarding
@@ -390,9 +390,8 @@ Cerefox is an open source project. Documentation is treated as a first-class del
 |-----------|------------|
 | Language | Python 3.11+ |
 | Package management | uv |
-| Web framework | FastAPI |
-| Templating | Jinja2 |
-| Frontend interactivity | HTMX |
+| Web framework | FastAPI (JSON API backend) |
+| Frontend | React + TypeScript (Vite, Mantine UI, TanStack Query) |
 | CLI | Click |
 | Database client | supabase-py |
 | Embeddings | httpx, openai (cloud API) |
