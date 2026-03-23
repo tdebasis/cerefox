@@ -100,6 +100,7 @@ class DocumentVersionResponse(BaseModel):
     source: str
     chunk_count: int
     total_chars: int
+    archived: bool = False
     created_at: str
 
 
@@ -376,6 +377,7 @@ class DocumentDetailResponse(BaseModel):
     total_chars: int = 0
     chunk_count: int = 0
     project_ids: list[str] = []
+    review_status: str = "approved"
     created_at: str | None = None
     updated_at: str | None = None
     versions: list[DocumentVersionResponse] = []
@@ -451,6 +453,7 @@ def api_get_document(
         total_chars=doc.get("total_chars", 0),
         chunk_count=doc.get("chunk_count", 0),
         project_ids=project_ids,
+        review_status=meta.get("review_status", "approved") if meta else "approved",
         created_at=meta.get("created_at") if meta else None,
         updated_at=meta.get("updated_at") if meta else None,
         versions=[
@@ -460,6 +463,7 @@ def api_get_document(
                 source=v.get("source", ""),
                 chunk_count=v.get("chunk_count", 0),
                 total_chars=v.get("total_chars", 0),
+                archived=v.get("archived", False),
                 created_at=v.get("created_at", ""),
             )
             for v in versions
@@ -811,3 +815,99 @@ def api_delete_project(
         return {"success": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Audit log ────────────────────────────────────────────────────────────────
+
+
+class AuditEntryResponse(BaseModel):
+    id: str
+    document_id: str | None = None
+    version_id: str | None = None
+    operation: str
+    author: str
+    author_type: str
+    size_before: int | None = None
+    size_after: int | None = None
+    description: str = ""
+    created_at: str
+
+
+@api_router.get("/audit-log")
+def api_list_audit_entries(
+    document_id: str | None = Query(None),
+    author: str | None = Query(None),
+    operation: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    client: CerefoxClient = Depends(get_client),
+) -> list[AuditEntryResponse]:
+    """List audit log entries with optional filters.
+
+    Supports temporal queries ("what changed since X"), author filtering,
+    operation filtering, and document scoping.
+    """
+    raw = client.list_audit_entries(
+        document_id=document_id,
+        author=author,
+        operation=operation,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    return [
+        AuditEntryResponse(
+            id=e["id"],
+            document_id=e.get("document_id"),
+            version_id=e.get("version_id"),
+            operation=e["operation"],
+            author=e.get("author", "unknown"),
+            author_type=e.get("author_type", "user"),
+            size_before=e.get("size_before"),
+            size_after=e.get("size_after"),
+            description=e.get("description", ""),
+            created_at=e.get("created_at", ""),
+        )
+        for e in raw
+    ]
+
+
+# ── Review status ────────────────────────────────────────────────────────────
+
+
+class ReviewStatusRequest(BaseModel):
+    status: str  # 'approved' or 'pending_review'
+
+
+@api_router.post("/documents/{document_id}/review-status")
+def api_set_review_status(
+    document_id: str,
+    body: ReviewStatusRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, str]:
+    """Set the review status of a document. Creates an audit entry."""
+    try:
+        client.set_review_status(document_id, body.status, author="user")
+        return {"status": body.status}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── Version archival ─────────────────────────────────────────────────────────
+
+
+class VersionArchiveRequest(BaseModel):
+    archived: bool
+
+
+@api_router.post("/documents/{document_id}/versions/{version_id}/archive")
+def api_set_version_archived(
+    document_id: str,
+    version_id: str,
+    body: VersionArchiveRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, bool]:
+    """Set or clear the archived flag on a version. Creates an audit entry."""
+    client.set_version_archived(version_id, body.archived, author="user")
+    return {"archived": body.archived}
