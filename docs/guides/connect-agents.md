@@ -435,7 +435,7 @@ In the action editor, paste this schema (replace `<your-project-ref>`):
 openapi: 3.1.0
 info:
   title: Cerefox Knowledge Base
-  version: 1.4.0
+  version: 1.5.0
 servers:
   - url: https://<your-project-ref>.supabase.co/functions/v1
 paths:
@@ -514,6 +514,20 @@ paths:
                     instead of creating a new one. The previous content is archived
                     as a version. If content is unchanged, the document is skipped
                     (no re-indexing).
+                author:
+                  type: string
+                  description: >
+                    Name of the agent or tool performing the ingestion (e.g.,
+                    "ChatGPT", "Claude Code"). Recorded in the audit log for
+                    attribution. Defaults to "agent" if not provided.
+                author_type:
+                  type: string
+                  enum: [user, agent]
+                  default: agent
+                  description: >
+                    Whether this write is from a human user or an AI agent.
+                    Controls review_status auto-transition: agent writes set
+                    the document to pending_review, user writes set it to approved.
       responses:
         '200':
           description: Ingest result
@@ -582,7 +596,44 @@ paths:
         '200':
           description: >
             Array of version objects (empty array if no versions exist):
-            [{ version_id, version_number, source, chunk_count, total_chars, created_at }]
+            [{ version_id, version_number, source, chunk_count, total_chars, archived, created_at }]
+  /cerefox-get-audit-log:
+    post:
+      operationId: getAuditLog
+      summary: >
+        Query audit log entries with optional filters. Returns entries with document
+        titles, author attribution, operation types, size changes, and descriptions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document_id:
+                  type: string
+                  description: Filter by document UUID (optional)
+                author:
+                  type: string
+                  description: Filter by author name (optional)
+                operation:
+                  type: string
+                  description: >
+                    Filter by operation type: create, update-content, update-metadata,
+                    delete, status-change, archive, unarchive (optional)
+                since:
+                  type: string
+                  description: ISO timestamp lower bound for temporal queries (optional)
+                limit:
+                  type: integer
+                  default: 50
+                  description: Max entries to return (max 200)
+      responses:
+        '200':
+          description: >
+            Array of audit log entries:
+            [{ id, document_id, doc_title, version_id, operation, author, author_type,
+               size_before, size_after, description, created_at }]
 ```
 
 **Step 3 — Configure authentication**
