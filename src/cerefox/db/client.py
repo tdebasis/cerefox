@@ -430,6 +430,7 @@ class CerefoxClient:
         document_id: str,
         source: str = "manual",
         retention_hours: int = 48,
+        cleanup_enabled: bool = True,
     ) -> dict[str, Any]:
         """Archive current chunks and create a version record via RPC.
 
@@ -437,6 +438,7 @@ class CerefoxClient:
         1. Creates a version row in cerefox_document_versions.
         2. Sets version_id on all current chunks (marking them as archived).
         3. Deletes versions older than retention_hours (always keeps the newest).
+           Skips versions with archived=true. Skips cleanup if cleanup_enabled=false.
 
         Returns a dict with version_id, version_number, chunk_count, total_chars.
         """
@@ -446,6 +448,7 @@ class CerefoxClient:
                 "p_document_id": document_id,
                 "p_source": source,
                 "p_retention_hours": retention_hours,
+                "p_cleanup_enabled": cleanup_enabled,
             },
         )
         if not rows:
@@ -755,3 +758,142 @@ class CerefoxClient:
         if not rows:
             raise RuntimeError("cerefox_save_note returned no data")
         return rows[0]
+
+    # ── Audit log ────────────────────────────────────────────────────────────
+
+    def create_audit_entry(
+        self,
+        operation: str,
+        author: str = "unknown",
+        document_id: str | None = None,
+        version_id: str | None = None,
+        size_before: int | None = None,
+        size_after: int | None = None,
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Insert an immutable audit log entry.
+
+        Args:
+            operation: One of 'create', 'update-content', 'update-metadata',
+                       'delete', 'status-change', 'archive', 'unarchive'.
+            author: Human username, agent name/model, or 'system'.
+            document_id: UUID of the affected document (nullable).
+            version_id: UUID of the version created by this operation (nullable).
+            size_before: Document total_chars before the operation.
+            size_after: Document total_chars after the operation.
+            description: Free-text explaining what changed and why.
+        """
+        data: dict[str, Any] = {
+            "operation": operation,
+            "author": author,
+            "description": description,
+        }
+        if document_id is not None:
+            data["document_id"] = document_id
+        if version_id is not None:
+            data["version_id"] = version_id
+        if size_before is not None:
+            data["size_before"] = size_before
+        if size_after is not None:
+            data["size_after"] = size_after
+
+        resp = self.client.table("cerefox_audit_log").insert(data).execute()
+        return resp.data[0] if resp.data else data
+
+    def list_audit_entries(
+        self,
+        document_id: str | None = None,
+        author: str | None = None,
+        operation: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Query audit log entries with optional filters.
+
+        Args:
+            document_id: Filter to entries for a specific document.
+            author: Filter by author (exact match).
+            operation: Filter by operation type.
+            since: ISO timestamp -- return entries created after this time.
+            until: ISO timestamp -- return entries created before this time.
+            limit: Max entries to return (default 50).
+        """
+        q = (
+            self.client.table("cerefox_audit_log")
+            .select("*")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if document_id:
+            q = q.eq("document_id", document_id)
+        if author:
+            q = q.eq("author", author)
+        if operation:
+            q = q.eq("operation", operation)
+        if since:
+            q = q.gte("created_at", since)
+        if until:
+            q = q.lte("created_at", until)
+        return q.execute().data or []
+
+    # ── Review status ────────────────────────────────────────────────────────
+
+    def set_review_status(
+        self, document_id: str, status: str, author: str = "unknown"
+    ) -> dict[str, Any]:
+        """Set the review_status of a document and create an audit entry.
+
+        Args:
+            document_id: UUID of the document.
+            status: 'approved' or 'pending_review'.
+            author: Who is making the change.
+        """
+        if status not in ("approved", "pending_review"):
+            raise ValueError(f"Invalid review_status: {status!r}")
+        old = self.get_document_by_id(document_id)
+        old_status = old.get("review_status", "unknown") if old else "unknown"
+        resp = (
+            self.client.table("cerefox_documents")
+            .update({"review_status": status, "updated_at": "now()"})
+            .eq("id", document_id)
+            .execute()
+        )
+        self.create_audit_entry(
+            operation="status-change",
+            author=author,
+            document_id=document_id,
+            description=f"Review status changed from '{old_status}' to '{status}'",
+        )
+        return resp.data[0] if resp.data else {}
+
+    # ── Version archival ─────────────────────────────────────────────────────
+
+    def set_version_archived(
+        self, version_id: str, archived: bool, author: str = "unknown"
+    ) -> dict[str, Any]:
+        """Set or clear the archived flag on a document version.
+
+        Args:
+            version_id: UUID of the version to archive/unarchive.
+            archived: True to protect from cleanup, False to unprotect.
+            author: Who is making the change.
+        """
+        resp = (
+            self.client.table("cerefox_document_versions")
+            .update({"archived": archived})
+            .eq("id", version_id)
+            .execute()
+        )
+        ver = resp.data[0] if resp.data else {}
+        op = "archive" if archived else "unarchive"
+        doc_id = ver.get("document_id")
+        ver_num = ver.get("version_number", "?")
+        self.create_audit_entry(
+            operation=op,
+            author=author,
+            document_id=doc_id,
+            version_id=version_id,
+            description=f"Version {ver_num} {'archived (protected from cleanup)' if archived else 'unarchived (eligible for cleanup)'}",
+        )
+        return ver

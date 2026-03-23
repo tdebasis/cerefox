@@ -699,10 +699,12 @@ $$;
 -- Returns: (version_id, version_number, chunk_count, total_chars) of the new version
 
 DROP FUNCTION IF EXISTS cerefox_snapshot_version(UUID, TEXT, INT);
+DROP FUNCTION IF EXISTS cerefox_snapshot_version(UUID, TEXT, INT, BOOLEAN);
 CREATE FUNCTION cerefox_snapshot_version(
-    p_document_id     UUID,
-    p_source          TEXT  DEFAULT 'manual',
-    p_retention_hours INT   DEFAULT 48
+    p_document_id       UUID,
+    p_source            TEXT    DEFAULT 'manual',
+    p_retention_hours   INT     DEFAULT 48,
+    p_cleanup_enabled   BOOLEAN DEFAULT TRUE
 )
 RETURNS TABLE (
     version_id     UUID,
@@ -749,15 +751,20 @@ BEGIN
 
     -- Lazy retention: delete versions outside the retention window,
     -- but always keep the most recently created version (the one we just made).
-    DELETE FROM cerefox_document_versions dv
-    WHERE dv.document_id = p_document_id
-      AND dv.created_at < NOW() - (p_retention_hours || ' hours')::INTERVAL
-      AND dv.id != (
-          SELECT id FROM cerefox_document_versions
-          WHERE document_id = p_document_id
-          ORDER BY created_at DESC
-          LIMIT 1
-      );
+    -- Skip archived versions (archived=true) -- they are protected from cleanup.
+    -- Skip cleanup entirely if p_cleanup_enabled is false (immutable mode).
+    IF p_cleanup_enabled THEN
+        DELETE FROM cerefox_document_versions dv
+        WHERE dv.document_id = p_document_id
+          AND dv.archived IS NOT TRUE
+          AND dv.created_at < NOW() - (p_retention_hours || ' hours')::INTERVAL
+          AND dv.id != (
+              SELECT id FROM cerefox_document_versions
+              WHERE document_id = p_document_id
+              ORDER BY created_at DESC
+              LIMIT 1
+          );
+    END IF;
 
     RETURN QUERY SELECT v_version_id, v_version_number, v_chunk_count, v_total_chars;
 END;

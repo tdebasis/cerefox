@@ -401,7 +401,7 @@ class TestUpdateDocument:
         assert not result.skipped  # back-compat property
         # snapshot_version archives current chunks; delete_chunks_for_document is NOT called
         mock_client.snapshot_version.assert_called_once_with(
-            "doc-001", source="manual", retention_hours=48
+            "doc-001", source="manual", retention_hours=48, cleanup_enabled=True
         )
         mock_client.delete_chunks_for_document.assert_not_called()
         mock_client.update_document.assert_called_once()
