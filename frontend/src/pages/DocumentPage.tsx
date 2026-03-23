@@ -7,6 +7,7 @@ import {
   Divider,
   Group,
   Loader,
+  Modal,
   SegmentedControl,
   Stack,
   Table,
@@ -14,6 +15,7 @@ import {
   Title,
 } from "@mantine/core";
 import {
+  IconArrowsDiff,
   IconDownload,
   IconEdit,
   IconLock,
@@ -25,7 +27,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
 import { setReviewStatus, setVersionArchived } from "../api/audit";
-import { fetchDocument, fetchChunks, deleteDocument, getDownloadUrl } from "../api/documents";
+import { fetchDocument, fetchChunks, deleteDocument, fetchDocumentVersion, getDownloadUrl } from "../api/documents";
+import { DiffViewer } from "../components/DiffViewer";
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useProjects } from "../hooks/useProjects";
 import { formatDateTime } from "../utils/dates";
@@ -83,6 +86,25 @@ export function DocumentPage() {
   });
 
   const [confirmUnarchive, setConfirmUnarchive] = useState<string | null>(null);
+  const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
+  const [diffVersionContent, setDiffVersionContent] = useState<string | null>(null);
+  const [diffVersionLabel, setDiffVersionLabel] = useState("");
+  const [diffLoading, setDiffLoading] = useState(false);
+
+  const openDiff = async (versionId: string, versionNumber: number) => {
+    setDiffLoading(true);
+    setDiffVersionId(versionId);
+    setDiffVersionLabel(`v${versionNumber}`);
+    try {
+      const versionDoc = await fetchDocumentVersion(id!, versionId);
+      setDiffVersionContent(versionDoc.full_content);
+    } catch {
+      showError("Failed to load version content");
+      setDiffVersionId(null);
+    } finally {
+      setDiffLoading(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -319,15 +341,26 @@ export function DocumentPage() {
                         )}
                       </Table.Td>
                       <Table.Td>
-                        <Button
-                          variant="subtle"
-                          size="compact-xs"
-                          leftSection={<IconDownload size={12} />}
-                          component="a"
-                          href={getDownloadUrl(id!, v.version_id)}
-                        >
-                          Download
-                        </Button>
+                        <Group gap={4}>
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            leftSection={<IconArrowsDiff size={12} />}
+                            onClick={() => openDiff(v.version_id, v.version_number)}
+                            loading={diffLoading && diffVersionId === v.version_id}
+                          >
+                            Diff
+                          </Button>
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            leftSection={<IconDownload size={12} />}
+                            component="a"
+                            href={getDownloadUrl(id!, v.version_id)}
+                          >
+                            Download
+                          </Button>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   ))}
@@ -393,6 +426,24 @@ export function DocumentPage() {
           </Accordion.Panel>
         </Accordion.Item>
       </Accordion>
+      <Modal
+        opened={diffVersionId !== null && diffVersionContent !== null}
+        onClose={() => {
+          setDiffVersionId(null);
+          setDiffVersionContent(null);
+        }}
+        title={`Diff: ${diffVersionLabel} vs current`}
+        size="xl"
+      >
+        {diffVersionContent !== null && (
+          <DiffViewer
+            oldContent={diffVersionContent}
+            newContent={doc.full_content}
+            oldLabel={diffVersionLabel}
+            newLabel="Current"
+          />
+        )}
+      </Modal>
     </Container>
   );
 }

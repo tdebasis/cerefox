@@ -815,33 +815,33 @@ governance workflows.
 |---|------|--------|-------|
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 15A.1 | Create `cerefox_audit_log` table (immutable, append-only) | Pending | Columns: id, document_id (nullable FK), operation (enum: create, update-content, update-metadata, delete, status-change, archive, unarchive), author, size_before, size_after, description (auto or manual), version_id (FK to `cerefox_document_versions`, nullable), created_at. No UPDATE/DELETE policies (immutable). |
-| 15A.2 | Add `review_status` column to `cerefox_documents` | Pending | Schema-level field (not JSONB). Values: `approved`, `pending_review`. Default: `approved`. Content searchable in both states. Two values only for now; extend later if needed. |
-| 15A.3 | Add `archived` boolean to `cerefox_document_versions` | Pending | Default: `false`. When `true`, the version is protected from retention cleanup. Set via API (archive/unarchive). |
-| 15A.4 | Add `CEREFOX_VERSION_CLEANUP_ENABLED` setting | Pending | Boolean (default: `true`). When `true`, versions older than `version_retention_hours` (existing param, default 48h) are cleaned up, except those with `archived=true`. When `false`, all versions are immutable (no cleanup). |
-| 15A.5 | Write audit log insertion logic in Python | Pending | `CerefoxClient.create_audit_entry(...)`. Called from `IngestionPipeline` (ingest, update, delete) and API routes (status-change, archive). Auto-generated descriptions for system actions (approval, archival, retention cleanup). |
-| 15A.6 | Wire audit log into ingestion pipeline | Pending | `ingest_text` -> audit entry (create). `update_document` -> audit entry (update-content or update-metadata). `delete_document` -> audit entry (delete). Author passed through from callers. |
-| 15A.7 | Add `review_status` auto-transition logic | Pending | Human edits (via web UI) -> `approved`. Agent edits (via MCP/Edge Function) -> `pending_review`. Manual override via API. |
-| 15A.8 | Add version archival API | Pending | `POST /api/v1/documents/{id}/versions/{version_id}/archive` and `/unarchive`. Sets `archived=true/false` on `cerefox_document_versions`. Creates audit entry. Unarchive requires confirmation (exposes version to cleanup). |
-| 15A.9 | Add audit log retrieval API | Pending | New `cerefox_get_audit_log` RPC. `GET /api/v1/audit-log` with filters: document_id, author, operation, date range. New Edge Function + MCP tool following single implementation principle. Separate from get_document to keep agent mental model simple. |
-| 15A.10 | Deploy schema changes | Pending | `db_migrate.py` for new table (`cerefox_audit_log`) + column additions (`review_status`, `archived`). |
-| 15A.11 | Write unit tests for audit log, review status, version archival | Pending | |
+| 15A.1 | Create `cerefox_audit_log` table (immutable, append-only) | Done | Includes author_type ('user' | 'agent') for review_status auto-transition. Indexes for temporal, author, document, FTS on description. ON DELETE SET NULL for document_id and version_id FKs. |
+| 15A.2 | Add `review_status` column to `cerefox_documents` | Done | CHECK constraint: 'approved' | 'pending_review'. Default 'approved'. |
+| 15A.3 | Add `archived` boolean to `cerefox_document_versions` | Done | Default false. Protected versions skip retention cleanup. |
+| 15A.4 | Add `CEREFOX_VERSION_CLEANUP_ENABLED` setting | Done | Boolean (default true). Passed to `cerefox_snapshot_version` RPC as `p_cleanup_enabled`. |
+| 15A.5 | Write audit log insertion logic in Python | Done | `create_audit_entry()`, `list_audit_entries()` on CerefoxClient. author_type validated. |
+| 15A.6 | Wire audit log into ingestion pipeline | Done | Audit entries on create, update-content, update-metadata. author/author_type threaded through ingest_text() and update_document(). try/except to avoid blocking on audit failure. |
+| 15A.7 | Add `review_status` auto-transition logic | Done | author_type='agent' + content change -> pending_review. author_type='user' + content change -> approved. Metadata-only updates do not change status. |
+| 15A.8 | Add version archival API | Done | `POST /api/v1/documents/{id}/versions/{vid}/archive`. Sets archived flag, creates audit entry. |
+| 15A.9 | Add audit log retrieval API + review status API | Done | `GET /api/v1/audit-log` with filters. `POST /api/v1/documents/{id}/review-status`. DocumentDetailResponse includes review_status, DocumentVersionResponse includes archived. |
+| 15A.10 | Deploy schema changes | Done | Migration 0004 applied. RPCs redeployed (snapshot_version with p_cleanup_enabled + archived skip, list_document_versions with archived column). |
+| 15A.11 | Write unit tests for audit log, review status, version archival | Done | 24 new tests in test_audit_and_governance.py. 392 total tests pass. |
 
 ### 15B: UI, Filters, and Temporal Queries
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 15B.1 | Add audit log FTS | Pending | FTS on audit log descriptions (e.g., "find all changes related to embeddings"). No semantic search (descriptions are short structured text). |
-| 15B.2 | Add `review_status` filter to search | Pending | Filter on existing search endpoints: All / Approved / Pending Review. Not a search target, a filter parameter. |
-| 15B.3 | Build Audit Log browser page | Pending | `/app/audit-log`: filterable table (author, operation type, date range). Each entry links to the document and version (if applicable). |
-| 15B.4 | Add review status indicators to all document lists | Pending | Badge on Dashboard recent docs, Search results, Project Documents: "Approved" (green) or "Pending Review" (yellow). |
-| 15B.5 | Add review status toggle to Document Detail page | Pending | Editable toggle/dropdown in document header (Approved / Pending Review). Creates audit entry on change. |
-| 15B.6 | Add version archival toggle to Document Detail page | Pending | In version history table: toggle per version row. Shows lock icon when archived. Unarchive shows confirmation dialog (version becomes eligible for cleanup). |
-| 15B.7 | Version diff view (current vs specific version) | Pending | "Diff vs current" button per version row in version history table. Side-by-side or inline diff. Helps user decide whether to revert. Moved from 14C.1. |
-| 15B.8 | Inline document editing on detail page | Pending | Edit content directly on the document detail page without navigating to /edit. Moved from 14C.2. Useful for quick corrections during review. |
-| 15B.9 | Update MCP server and Edge Functions for audit log + review status | Pending | New `cerefox_get_audit_log` MCP tool + Edge Function. Pass `author` field through cerefox-ingest and cerefox-mcp. Expose `review_status` filter on cerefox-search. |
+| 15B.1 | Add audit log FTS | Pending | FTS index deployed on description column. Query integration pending (needs RPC or direct FTS query). |
+| 15B.2 | Add `review_status` filter to search | Pending | Filter on search page: All / Approved / Pending Review. |
+| 15B.3 | Build Audit Log browser page | Done | `/app/audit-log`: filterable table (operation, author). Color-coded badges, document links, size delta. |
+| 15B.4 | Add review status indicators to all document lists | Done | Green "Approved" / yellow "Pending" badges on dashboard, project documents. list_documents query updated to include review_status. |
+| 15B.5 | Add review status toggle to Document Detail page | Done | SegmentedControl with green/yellow color matching. Creates audit entry via API. |
+| 15B.6 | Add version archival toggle to Document Detail page | Done | Clickable badges: green "Yes (archived)" / yellow "No (will be deleted)" with tooltips. Unarchive requires confirmation. Lock icon on archived versions. |
+| 15B.7 | Version diff view (current vs specific version) | Done | "Diff" button per version row. Modal with unified and side-by-side modes. Uses `diff` npm package. Shows +added/-removed stats. |
+| 15B.8 | Inline document editing on detail page | Deferred | Edit page with Edit/Preview toggle already provides good UX. Inline editing is a convenience, not a capability gap. |
+| 15B.9 | Update MCP server and Edge Functions for audit log + review status | Pending | New `cerefox_get_audit_log` MCP tool + Edge Function. Pass `author`/`author_type` through cerefox-ingest. Expose `review_status` filter on cerefox-search. |
 | 15B.10 | Update Playwright e2e tests for governance features | Pending | Test review status toggle, version archival, audit log page, diff view. |
-| 15B.11 | Update documentation | Pending | Vision doc cross-references, solution-design, CLAUDE.md, configuration guide. |
+| 15B.11 | Update documentation | Pending | Vision doc cross-references, solution-design, CLAUDE.md, configuration guide, upgrading guide. |
 
 **Design decisions:**
 - **Attribution**: no `created_by`/`updated_by` columns on documents. The audit log is the source of truth for who did what, when. Denormalized columns may be added later if needed.
@@ -858,9 +858,11 @@ and lightweight review workflow. Temporal queries support multi-agent coordinati
 
 ## Current Focus
 
-**Iteration 14 complete.** Full React + TypeScript SPA with all pages, dark mode, toast
-notifications, and all documentation updated. Jinja2 SSR fully removed. 368 unit tests,
-7 UI e2e tests, API e2e tests all pass.
+**Iteration 15A complete, 15B in progress.** Audit log table, review_status, version
+archival all deployed and working. UI implemented: audit log browser page, review status
+toggle and badges, version archival toggles with tooltips, version diff viewer (unified
+and side-by-side). 392 unit tests pass.
 
-**Next**: Iteration 15 -- audit log, attribution, review status, and version governance.
-Starting with 15A (schema + backend logic).
+**Remaining 15B tasks**: audit log FTS integration (15B.1), review_status filter on search
+(15B.2), MCP/Edge Function updates for author pass-through (15B.9), e2e tests (15B.10),
+documentation (15B.11).

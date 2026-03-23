@@ -1,0 +1,38 @@
+.diffPre {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: 6px;
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.added {
+  background-color: rgba(0, 180, 0, 0.15);
+  display: inline;
+}
+
+.removed {
+  background-color: rgba(220, 0, 0, 0.15);
+  display: inline;
+}
+
+.context {
+  display: inline;
+}
+
+.splitContainer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.splitPane {
+  min-width: 0;
+  overflow: hidden;
+}
