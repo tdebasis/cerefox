@@ -1,6 +1,6 @@
 import { Group, SegmentedControl, Text } from "@mantine/core";
 import { diffLines, type Change } from "diff";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import styles from "./DiffViewer.module.css";
 
@@ -95,12 +95,30 @@ function SplitDiff({
   oldLabel: string;
   newLabel: string;
 }) {
+  const leftRef = useRef<HTMLPreElement>(null);
+  const rightRef = useRef<HTMLPreElement>(null);
+  const syncing = useRef(false);
+
+  const syncScroll = useCallback(
+    (source: "left" | "right") => {
+      if (syncing.current) return;
+      syncing.current = true;
+      const from = source === "left" ? leftRef.current : rightRef.current;
+      const to = source === "left" ? rightRef.current : leftRef.current;
+      if (from && to) {
+        to.scrollTop = from.scrollTop;
+        to.scrollLeft = from.scrollLeft;
+      }
+      syncing.current = false;
+    },
+    [],
+  );
+
   const leftLines: { text: string; type: "context" | "removed" }[] = [];
   const rightLines: { text: string; type: "context" | "added" }[] = [];
 
   for (const change of changes) {
     const lines = change.value.split("\n");
-    // Remove trailing empty string from split
     if (lines[lines.length - 1] === "") lines.pop();
 
     if (change.added) {
@@ -127,7 +145,11 @@ function SplitDiff({
         <Text size="xs" fw={600} c="dimmed" mb={4}>
           {oldLabel}
         </Text>
-        <pre className={styles.diffPre}>
+        <pre
+          ref={leftRef}
+          className={styles.diffPre}
+          onScroll={() => syncScroll("left")}
+        >
           {leftLines.map((l, i) => (
             <span
               key={i}
@@ -143,7 +165,11 @@ function SplitDiff({
         <Text size="xs" fw={600} c="dimmed" mb={4}>
           {newLabel}
         </Text>
-        <pre className={styles.diffPre}>
+        <pre
+          ref={rightRef}
+          className={styles.diffPre}
+          onScroll={() => syncScroll("right")}
+        >
           {rightLines.map((l, i) => (
             <span
               key={i}

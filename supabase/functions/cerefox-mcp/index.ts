@@ -107,6 +107,11 @@ const TOOLS = [
           type: "object",
           description: "Arbitrary JSON metadata (optional)",
         },
+        author: {
+          type: "string",
+          description:
+            'Name of the agent or tool performing the ingestion (e.g., "Claude Code", "Cursor"). Recorded in the audit log for attribution. Defaults to "mcp-agent" if not provided.',
+        },
       },
     },
   },
@@ -324,7 +329,7 @@ async function handleToolCall(
         source: args.source ?? "agent",
         update_if_exists: args.update_if_exists ?? false,
         metadata: args.metadata ?? {},
-        author: "mcp-agent",
+        author: args.author ?? "mcp-agent",
         author_type: "agent",
       }),
     });
