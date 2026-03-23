@@ -54,9 +54,9 @@ def cerefox_client(mock_supabase):
 
 
 class TestCreateAuditEntry:
-    def test_inserts_into_audit_log_table(self, cerefox_client, mock_supabase):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-001", "operation": "create"}]
+    def test_calls_rpc_with_correct_params(self, cerefox_client, mock_supabase):
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-001", "created_at": "2026-03-23"}]
         )
         result = cerefox_client.create_audit_entry(
             operation="create",
@@ -66,46 +66,41 @@ class TestCreateAuditEntry:
             size_after=500,
             description="Created test doc",
         )
-        mock_supabase.table.assert_called_with("cerefox_audit_log")
-        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
-        assert insert_call["operation"] == "create"
-        assert insert_call["author"] == "fotis"
-        assert insert_call["author_type"] == "user"
-        assert insert_call["document_id"] == "doc-001"
-        assert insert_call["size_after"] == 500
-        assert insert_call["description"] == "Created test doc"
+        mock_supabase.rpc.assert_called_once_with(
+            "cerefox_create_audit_entry",
+            {
+                "p_document_id": "doc-001",
+                "p_version_id": None,
+                "p_operation": "create",
+                "p_author": "fotis",
+                "p_author_type": "user",
+                "p_size_before": None,
+                "p_size_after": 500,
+                "p_description": "Created test doc",
+            },
+        )
 
-    def test_omits_nullable_fields_when_not_provided(self, cerefox_client, mock_supabase):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-002"}]
+    def test_passes_none_for_omitted_nullable_fields(self, cerefox_client, mock_supabase):
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-002", "created_at": "2026-03-23"}]
         )
         cerefox_client.create_audit_entry(operation="delete", author="system")
-        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
-        assert "document_id" not in insert_call
-        assert "version_id" not in insert_call
-        assert "size_before" not in insert_call
-        assert "size_after" not in insert_call
-
-    def test_invalid_author_type_defaults_to_user(self, cerefox_client, mock_supabase):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-003"}]
-        )
-        cerefox_client.create_audit_entry(
-            operation="create", author_type="invalid_type"
-        )
-        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
-        assert insert_call["author_type"] == "user"
+        call_params = mock_supabase.rpc.call_args[0][1]
+        assert call_params["p_document_id"] is None
+        assert call_params["p_version_id"] is None
+        assert call_params["p_size_before"] is None
+        assert call_params["p_size_after"] is None
 
     def test_agent_author_type_preserved(self, cerefox_client, mock_supabase):
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-004"}]
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-004", "created_at": "2026-03-23"}]
         )
         cerefox_client.create_audit_entry(
             operation="update-content", author="Claude Code", author_type="agent"
         )
-        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
-        assert insert_call["author_type"] == "agent"
-        assert insert_call["author"] == "Claude Code"
+        call_params = mock_supabase.rpc.call_args[0][1]
+        assert call_params["p_author_type"] == "agent"
+        assert call_params["p_author"] == "Claude Code"
 
 
 # ── Audit log: list_audit_entries ────────────────────────────────────────────
@@ -182,13 +177,13 @@ class TestSetReviewStatus:
         mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[{"id": "doc-001", "review_status": "pending_review"}]
         )
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-001"}]
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-001", "created_at": "2026-03-23"}]
         )
         cerefox_client.set_review_status("doc-001", "approved", author="fotis")
-        # Verify audit_log insert was called (among other table calls)
-        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
-        assert "cerefox_audit_log" in table_calls
+        # Verify audit RPC was called
+        rpc_calls = [c[0][0] for c in mock_supabase.rpc.call_args_list]
+        assert "cerefox_create_audit_entry" in rpc_calls
 
 
 # ── Version archival ─────────────────────────────────────────────────────────
@@ -220,24 +215,23 @@ class TestSetVersionArchived:
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 3, "archived": True}]
         )
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-001"}]
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-001", "created_at": "2026-03-23"}]
         )
         cerefox_client.set_version_archived("ver-001", True, author="fotis")
-        # Check audit_log table was accessed
-        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
-        assert "cerefox_audit_log" in table_calls
+        rpc_calls = [c[0][0] for c in mock_supabase.rpc.call_args_list]
+        assert "cerefox_create_audit_entry" in rpc_calls
 
     def test_creates_audit_entry_for_unarchive(self, cerefox_client, mock_supabase):
         mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
             data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 3, "archived": False}]
         )
-        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "audit-001"}]
+        mock_supabase.rpc.return_value.execute.return_value = MagicMock(
+            data=[{"audit_id": "audit-001", "created_at": "2026-03-23"}]
         )
         cerefox_client.set_version_archived("ver-001", False, author="fotis")
-        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
-        assert "cerefox_audit_log" in table_calls
+        rpc_calls = [c[0][0] for c in mock_supabase.rpc.call_args_list]
+        assert "cerefox_create_audit_entry" in rpc_calls
 
 
 # ── Pipeline: author_type threading and review_status auto-transition ────────

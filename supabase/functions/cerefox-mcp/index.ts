@@ -293,6 +293,8 @@ async function handleToolCall(
         source: args.source ?? "agent",
         update_if_exists: args.update_if_exists ?? false,
         metadata: args.metadata ?? {},
+        author: "mcp-agent",
+        author_type: "agent",
       }),
     });
 

@@ -343,6 +343,8 @@ async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[ty
         project_name=arguments.get("project_name"),
         metadata=arguments.get("metadata") or {},
         update_existing=bool(arguments.get("update_if_exists", False)),
+        author="mcp-agent",
+        author_type="agent",
     )
 
     if result.action == "skipped":

@@ -846,9 +846,45 @@ AS $$
     ORDER BY created_at DESC;
 $$;
 
--- ── Metadata key discovery RPC ───────────────────────────────────────────────
+-- ── cerefox_create_audit_entry ────────────────────────────────────────────────
+-- Inserts an immutable audit log entry. Called by all access paths (Python
+-- pipeline, Edge Functions, MCP) to maintain the single implementation principle.
+-- Returns the created entry's id and created_at.
+
+DROP FUNCTION IF EXISTS cerefox_create_audit_entry(UUID, UUID, TEXT, TEXT, TEXT, INT, INT, TEXT);
+CREATE FUNCTION cerefox_create_audit_entry(
+    p_document_id   UUID    DEFAULT NULL,
+    p_version_id    UUID    DEFAULT NULL,
+    p_operation     TEXT    DEFAULT 'create',
+    p_author        TEXT    DEFAULT 'unknown',
+    p_author_type   TEXT    DEFAULT 'user',
+    p_size_before   INT     DEFAULT NULL,
+    p_size_after    INT     DEFAULT NULL,
+    p_description   TEXT    DEFAULT ''
+)
+RETURNS TABLE (
+    audit_id    UUID,
+    created_at  TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+    INSERT INTO cerefox_audit_log (
+        document_id, version_id, operation, author, author_type,
+        size_before, size_after, description
+    )
+    VALUES (
+        p_document_id, p_version_id, p_operation, p_author,
+        CASE WHEN p_author_type IN ('user', 'agent') THEN p_author_type ELSE 'user' END,
+        p_size_before, p_size_after, p_description
+    )
+    RETURNING id AS audit_id, cerefox_audit_log.created_at;
+$$;
+
+-- ── Metadata key discovery RPC ────────────────────────────────────────────────
 -- Derives metadata keys from actual document data (metadata JSONB column).
--- No registry table needed — always accurate, zero maintenance.
+-- No registry table needed; always accurate, zero maintenance.
 -- Used by CLI, MCP tools, web UI autocomplete.
 
 DROP FUNCTION IF EXISTS cerefox_list_metadata_keys();

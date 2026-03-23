@@ -786,25 +786,20 @@ class CerefoxClient:
             size_after: Document total_chars after the operation.
             description: Free-text explaining what changed and why.
         """
-        if author_type not in ("user", "agent"):
-            author_type = "user"
-        data: dict[str, Any] = {
-            "operation": operation,
-            "author": author,
-            "author_type": author_type,
-            "description": description,
-        }
-        if document_id is not None:
-            data["document_id"] = document_id
-        if version_id is not None:
-            data["version_id"] = version_id
-        if size_before is not None:
-            data["size_before"] = size_before
-        if size_after is not None:
-            data["size_after"] = size_after
-
-        resp = self.client.table("cerefox_audit_log").insert(data).execute()
-        return resp.data[0] if resp.data else data
+        rows = self.rpc(
+            "cerefox_create_audit_entry",
+            {
+                "p_document_id": document_id,
+                "p_version_id": version_id,
+                "p_operation": operation,
+                "p_author": author,
+                "p_author_type": author_type,
+                "p_size_before": size_before,
+                "p_size_after": size_after,
+                "p_description": description,
+            },
+        )
+        return rows[0] if rows else {}
 
     def list_audit_entries(
         self,

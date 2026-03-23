@@ -589,6 +589,8 @@ def api_edit_document(
             title=body.title.strip(),
             project_ids=body.project_ids if body.project_ids else None,
             metadata=body.metadata if body.metadata else None,
+            author="web-ui",
+            author_type="user",
         )
         return EditResponse(success=True, reindexed=result.reindexed)
     except Exception as exc:
@@ -634,6 +636,8 @@ async def api_upload_content(
             document_id=document_id,
             text=text,
             title=existing.get("title", file.filename or "Untitled"),
+            author="web-ui",
+            author_type="user",
         )
         return EditResponse(success=True, reindexed=result.reindexed)
     except Exception as exc:
@@ -667,6 +671,8 @@ def api_ingest_paste(
             project_ids=body.project_ids if body.project_ids else None,
             metadata=body.metadata if body.metadata else None,
             update_existing=body.update_existing,
+            author="web-ui",
+            author_type="user",
         )
         return IngestResponse(
             success=not res.skipped,
@@ -712,6 +718,8 @@ async def api_ingest_file(
             text, doc_title, source="file", source_path=file.filename,
             project_ids=pids, metadata=meta,
             update_existing=update_existing,
+            author="web-ui",
+            author_type="user",
         )
         return IngestResponse(
             success=not res.skipped,
