@@ -74,6 +74,7 @@ export interface DocumentDetail {
   total_chars: number;
   chunk_count: number;
   project_ids: string[];
+  review_status: string;
   created_at: string | null;
   updated_at: string | null;
   versions: DocumentVersion[];
@@ -85,6 +86,22 @@ export interface DocumentVersion {
   source: string;
   chunk_count: number;
   total_chars: number;
+  archived: boolean;
+  created_at: string;
+}
+
+// -- Audit log --
+
+export interface AuditEntry {
+  id: string;
+  document_id: string | null;
+  version_id: string | null;
+  operation: string;
+  author: string;
+  author_type: string;
+  size_before: number | null;
+  size_after: number | null;
+  description: string;
   created_at: string;
 }
 

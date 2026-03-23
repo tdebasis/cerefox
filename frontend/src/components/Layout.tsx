@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { label: "Search", path: "/search" },
   { label: "Ingest", path: "/ingest" },
   { label: "Projects", path: "/projects" },
+  { label: "Audit Log", path: "/audit-log" },
 ];
 
 export function Layout() {

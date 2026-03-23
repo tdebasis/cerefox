@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 
 import { Layout } from "./components/Layout";
+import { AuditLogPage } from "./pages/AuditLogPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DocumentEditPage } from "./pages/DocumentEditPage";
 import { DocumentPage } from "./pages/DocumentPage";
@@ -20,6 +21,7 @@ export function App() {
         <Route path="/ingest" element={<IngestPage />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/projects/:id/documents" element={<ProjectDocumentsPage />} />
+        <Route path="/audit-log" element={<AuditLogPage />} />
       </Route>
     </Routes>
   );

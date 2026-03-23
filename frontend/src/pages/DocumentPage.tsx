@@ -7,6 +7,7 @@ import {
   Divider,
   Group,
   Loader,
+  SegmentedControl,
   Stack,
   Table,
   Text,
@@ -15,12 +16,15 @@ import {
 import {
   IconDownload,
   IconEdit,
+  IconLock,
+  IconLockOpen,
   IconTrash,
 } from "@tabler/icons-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
+import { setReviewStatus, setVersionArchived } from "../api/audit";
 import { fetchDocument, fetchChunks, deleteDocument, getDownloadUrl } from "../api/documents";
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useProjects } from "../hooks/useProjects";
@@ -58,6 +62,28 @@ export function DocumentPage() {
     onError: (err) => showError("Delete failed", String(err)),
   });
 
+  const reviewMutation = useMutation({
+    mutationFn: (status: string) => setReviewStatus(id!, status),
+    onSuccess: (_, status) => {
+      queryClient.invalidateQueries({ queryKey: ["document", id] });
+      showSuccess("Review status updated", status === "approved" ? "Approved" : "Pending review");
+    },
+    onError: (err) => showError("Status update failed", String(err)),
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: ({ versionId, archived }: { versionId: string; archived: boolean }) =>
+      setVersionArchived(id!, versionId, archived),
+    onSuccess: (_, { archived }) => {
+      queryClient.invalidateQueries({ queryKey: ["document", id] });
+      showSuccess(archived ? "Version archived" : "Version unarchived",
+        archived ? "Protected from cleanup" : "Eligible for cleanup");
+    },
+    onError: (err) => showError("Archive update failed", String(err)),
+  });
+
+  const [confirmUnarchive, setConfirmUnarchive] = useState<string | null>(null);
+
   if (isLoading) {
     return (
       <Container size="lg">
@@ -91,6 +117,13 @@ export function DocumentPage() {
                 {projectMap.get(pid) || pid.slice(0, 8)}
               </Badge>
             ))}
+            <Badge
+              variant="light"
+              size="sm"
+              color={doc.review_status === "approved" ? "green" : "yellow"}
+            >
+              {doc.review_status === "approved" ? "Approved" : "Pending Review"}
+            </Badge>
             <Text size="sm" c="dimmed">
               {doc.chunk_count} chunks | {doc.total_chars.toLocaleString()} chars
             </Text>
@@ -106,6 +139,16 @@ export function DocumentPage() {
                 Updated: {formatDateTime(doc.updated_at)}
               </Text>
             )}
+            <SegmentedControl
+              size="xs"
+              value={doc.review_status}
+              onChange={(v) => reviewMutation.mutate(v)}
+              data={[
+                { label: "Approved", value: "approved" },
+                { label: "Pending Review", value: "pending_review" },
+              ]}
+              disabled={reviewMutation.isPending}
+            />
           </Group>
         </div>
         <Group gap="xs">
@@ -203,6 +246,7 @@ export function DocumentPage() {
                     <Table.Th>Date</Table.Th>
                     <Table.Th>Size</Table.Th>
                     <Table.Th>Chunks</Table.Th>
+                    <Table.Th>Protected</Table.Th>
                     <Table.Th></Table.Th>
                   </Table.Tr>
                 </Table.Thead>
@@ -210,9 +254,12 @@ export function DocumentPage() {
                   {doc.versions.map((v) => (
                     <Table.Tr key={v.version_id}>
                       <Table.Td>
-                        <Badge variant="outline" size="sm">
-                          v{v.version_number}
-                        </Badge>
+                        <Group gap={4}>
+                          <Badge variant="outline" size="sm">
+                            v{v.version_number}
+                          </Badge>
+                          {v.archived && <IconLock size={14} color="var(--mantine-color-blue-6)" />}
+                        </Group>
                       </Table.Td>
                       <Table.Td>
                         <Text size="sm">{formatDateTime(v.created_at)}</Text>
@@ -224,6 +271,54 @@ export function DocumentPage() {
                       </Table.Td>
                       <Table.Td>
                         <Text size="sm">{v.chunk_count}</Text>
+                      </Table.Td>
+                      <Table.Td>
+                        {v.archived ? (
+                          confirmUnarchive === v.version_id ? (
+                            <Group gap={4}>
+                              <Button
+                                size="compact-xs"
+                                color="yellow"
+                                onClick={() => {
+                                  archiveMutation.mutate({ versionId: v.version_id, archived: false });
+                                  setConfirmUnarchive(null);
+                                }}
+                                loading={archiveMutation.isPending}
+                              >
+                                Confirm
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                onClick={() => setConfirmUnarchive(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </Group>
+                          ) : (
+                            <Button
+                              variant="subtle"
+                              size="compact-xs"
+                              color="blue"
+                              leftSection={<IconLockOpen size={12} />}
+                              onClick={() => setConfirmUnarchive(v.version_id)}
+                            >
+                              Unarchive
+                            </Button>
+                          )
+                        ) : (
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            leftSection={<IconLock size={12} />}
+                            onClick={() =>
+                              archiveMutation.mutate({ versionId: v.version_id, archived: true })
+                            }
+                            loading={archiveMutation.isPending}
+                          >
+                            Archive
+                          </Button>
+                        )}
                       </Table.Td>
                       <Table.Td>
                         <Button
