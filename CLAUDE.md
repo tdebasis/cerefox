@@ -204,13 +204,17 @@ See `docs/guides/access-paths.md` for a full breakdown with credential sources a
 
 ### Single Implementation Principle
 
-Business logic lives **only in Postgres RPCs**. If you need to add logic to a tool:
+Business logic lives **only in Postgres RPCs** wherever feasible. If you need to add logic to a tool:
 1. Add or modify the RPC in `src/cerefox/db/rpcs.sql`
 2. The Python client (`db/client.py`) calls the RPC via `supabase.rpc()`
 3. The dedicated Edge Function calls the same RPC via `supabase.rpc()`
 4. `cerefox-mcp` delegates to the dedicated Edge Function via `fetch()`
 
 **Do NOT** add business logic directly in Edge Function TypeScript, Python routes, or `cerefox-mcp`. The only logic in Edge Functions is input validation, RPC call, and JSON response formatting.
+
+**Known exception -- ingestion orchestration**: The ingestion pipeline (chunk, embed, store, audit, set review_status) is implemented in both the Python `IngestionPipeline` and the `cerefox-ingest` Edge Function. This is because the pipeline requires external HTTP calls (embedding API) which cannot run inside a Postgres function. Individual operations within the pipeline (version snapshot, audit entry creation, search, document retrieval) use RPCs. The orchestration layer is intentionally duplicated. When changing ingestion logic, update both implementations and keep their behavior consistent.
+
+**Simple CRUD** operations (insert/update/delete on documents, chunks, projects) use the Supabase REST API directly (`client.table(...)`). This is acceptable as these are pure data access, not business logic. The REST API maps to the same SQL the RPCs would generate.
 
 ### Edge Function Inventory
 
