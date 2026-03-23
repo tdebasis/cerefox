@@ -279,7 +279,7 @@ export function DocumentPage() {
                                 }}
                                 loading={archiveMutation.isPending}
                               >
-                                Confirm
+                                Confirm removal
                               </Button>
                               <Button
                                 size="compact-xs"
@@ -290,28 +290,32 @@ export function DocumentPage() {
                               </Button>
                             </Group>
                           ) : (
-                            <Button
-                              variant="subtle"
-                              size="compact-xs"
-                              color="blue"
-                              leftSection={<IconLockOpen size={12} />}
+                            <Badge
+                              variant="light"
+                              size="sm"
+                              color="green"
+                              leftSection={<IconLock size={12} />}
+                              style={{ cursor: "pointer" }}
+                              title="Click to remove protection. This version will become eligible for automatic cleanup."
                               onClick={() => setConfirmUnarchive(v.version_id)}
                             >
-                              Unarchive
-                            </Button>
+                              Yes (archived)
+                            </Badge>
                           )
                         ) : (
-                          <Button
-                            variant="subtle"
-                            size="compact-xs"
-                            leftSection={<IconLock size={12} />}
+                          <Badge
+                            variant="light"
+                            size="sm"
+                            color="yellow"
+                            leftSection={<IconLockOpen size={12} />}
+                            style={{ cursor: "pointer" }}
+                            title="Click to archive. Archived versions are protected from automatic cleanup and retained indefinitely."
                             onClick={() =>
                               archiveMutation.mutate({ versionId: v.version_id, archived: true })
                             }
-                            loading={archiveMutation.isPending}
                           >
-                            Archive
-                          </Button>
+                            No (will be deleted)
+                          </Badge>
                         )}
                       </Table.Td>
                       <Table.Td>
