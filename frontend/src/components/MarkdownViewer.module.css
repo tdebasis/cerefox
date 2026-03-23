@@ -38,14 +38,14 @@
 }
 
 .markdown code {
-  background: var(--mantine-color-gray-1);
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
   padding: 0.15em 0.35em;
   border-radius: 3px;
   font-size: 0.88em;
 }
 
 .markdown pre {
-  background: var(--mantine-color-gray-1);
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
   padding: 0.8em 1em;
   border-radius: 6px;
   overflow-x: auto;
@@ -78,7 +78,7 @@
 }
 
 .markdown th {
-  background: var(--mantine-color-gray-1);
+  background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5));
   font-weight: 600;
 }
 
