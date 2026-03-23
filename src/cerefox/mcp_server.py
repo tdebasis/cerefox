@@ -173,6 +173,14 @@ async def list_tools() -> list[types.Tool]:
                             "across multiple agent sessions."
                         ),
                     },
+                    "author": {
+                        "type": "string",
+                        "description": (
+                            'Name of the agent or tool performing the ingestion (e.g., "Claude Code", '
+                            '"Cursor"). Recorded in the audit log for attribution. '
+                            'Defaults to "mcp-agent" if not provided.'
+                        ),
+                    },
                 },
             },
         ),
@@ -233,6 +241,48 @@ async def list_tools() -> list[types.Tool]:
                 },
             },
         ),
+        types.Tool(
+            name="cerefox_get_audit_log",
+            description=(
+                "Retrieve audit log entries showing who changed what and when. "
+                "Supports filtering by document, author, operation type, and time range. "
+                "Returns entries with document titles, author attribution, size changes, "
+                "and descriptions."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "string",
+                        "description": "Filter by document UUID (optional)",
+                    },
+                    "author": {
+                        "type": "string",
+                        "description": "Filter by author name (optional)",
+                    },
+                    "operation": {
+                        "type": "string",
+                        "description": (
+                            "Filter by operation type: create, update-content, "
+                            "update-metadata, delete, status-change, archive, "
+                            "unarchive (optional)"
+                        ),
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "ISO timestamp lower bound for temporal queries (optional)"
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": (
+                            "Maximum number of entries to return (default: 50, max: 200)"
+                        ),
+                    },
+                },
+            },
+        ),
     ]
 
 
@@ -257,6 +307,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return await _handle_get_document(client, arguments)
     elif name == "cerefox_list_versions":
         return await _handle_list_versions(client, arguments)
+    elif name == "cerefox_get_audit_log":
+        return await _handle_get_audit_log(client, arguments)
     else:
         raise ValueError(f"Unknown tool: {name}")
 
@@ -336,6 +388,7 @@ async def _handle_search(
 
 
 async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[types.TextContent]:
+    author = arguments.get("author") or "mcp-agent"
     result = pipeline.ingest_text(
         text=arguments["content"],
         title=arguments["title"],
@@ -343,7 +396,7 @@ async def _handle_ingest(client: Any, pipeline: Any, arguments: dict) -> list[ty
         project_name=arguments.get("project_name"),
         metadata=arguments.get("metadata") or {},
         update_existing=bool(arguments.get("update_if_exists", False)),
-        author="mcp-agent",
+        author=author,
         author_type="agent",
     )
 
@@ -420,6 +473,38 @@ async def _handle_list_metadata_keys(client: Any) -> list[types.TextContent]:
     if not keys:
         return [types.TextContent(type="text", text="No metadata keys found across documents.")]
     return [types.TextContent(type="text", text=json.dumps(keys, indent=2))]
+
+
+async def _handle_get_audit_log(client: Any, arguments: dict) -> list[types.TextContent]:
+    document_id = arguments.get("document_id")
+    author = arguments.get("author")
+    operation = arguments.get("operation")
+    since = arguments.get("since")
+    limit = min(int(arguments.get("limit") or 50), 200)
+
+    entries = client.list_audit_entries(
+        document_id=document_id,
+        author=author,
+        operation=operation,
+        since=since,
+        limit=limit,
+    )
+    if not entries:
+        return [types.TextContent(type="text", text="No audit log entries found.")]
+
+    lines = [f"Audit log ({len(entries)} entries):", ""]
+    for e in entries:
+        doc_title = e.get("doc_title") or e.get("document_id") or "(deleted)"
+        size_info = ""
+        if e.get("size_before") is not None or e.get("size_after") is not None:
+            size_info = f" | size: {e.get('size_before', '?')} -> {e.get('size_after', '?')}"
+        lines.append(
+            f"  [{e['created_at']}] {e['operation']} | {doc_title} | "
+            f"by {e['author']} ({e['author_type']}){size_info}"
+        )
+        if e.get("description"):
+            lines.append(f"    {e['description']}")
+    return [types.TextContent(type="text", text="\n".join(lines))]
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
