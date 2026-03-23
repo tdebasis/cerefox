@@ -331,7 +331,7 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Content changed — re-chunk, re-embed, swap chunks
+      // Content changed — re-chunk, re-embed, ingest via RPC
       const chunks = chunkMarkdown(content);
       if (chunks.length === 0) {
         return new Response(JSON.stringify({ error: "Content produced no chunks" }), {
@@ -348,56 +348,39 @@ Deno.serve(async (req: Request) => {
       }
 
       const totalChars = chunks.reduce((s, c) => s + c.char_count, 0);
-
-      // Archive current chunks as a new version before inserting new ones
-      const { error: snapshotErr } = await supabase.rpc("cerefox_snapshot_version", {
-        p_document_id: existingDoc.id,
-        p_source: source,
-      });
-      if (snapshotErr) {
-        return new Response(
-          JSON.stringify({ error: `Failed to snapshot version: ${snapshotErr.message}` }),
-          { status: 500, headers },
-        );
-      }
-
-      // Update document record + review_status based on author_type
       const reviewStatus = author_type === "agent" ? "pending_review" : "approved";
-      await supabase
-        .from("cerefox_documents")
-        .update({ content_hash: contentHash, chunk_count: chunks.length, total_chars: totalChars, review_status: reviewStatus })
-        .eq("id", existingDoc.id);
 
-      // Insert new chunks
-      const chunkRows = chunks.map((chunk, i) => ({
-        document_id: existingDoc.id,
+      // Single RPC handles: snapshot version, update doc, insert chunks, set review_status, audit entry
+      const chunkData = chunks.map((chunk, i) => ({
         chunk_index: i,
         heading_path: chunk.heading_path,
         heading_level: chunk.heading_level,
         title: chunk.title,
         content: chunk.content,
         char_count: chunk.char_count,
-        embedding_primary: embeddings[i],
-        embedder_primary: OPENAI_MODEL,
+        embedding: embeddings[i],
+        embedder: OPENAI_MODEL,
       }));
 
-      const { error: chunkErr } = await supabase.from("cerefox_chunks").insert(chunkRows);
-      if (chunkErr) {
+      const { data: ingestResult, error: ingestErr } = await supabase.rpc("cerefox_ingest_document", {
+        p_document_id: existingDoc.id,
+        p_title: existingDoc.title,
+        p_source: source,
+        p_content_hash: contentHash,
+        p_metadata: metadata,
+        p_review_status: reviewStatus,
+        p_chunks: chunkData,
+        p_author: author,
+        p_author_type: author_type,
+        p_source_label: source,
+      });
+
+      if (ingestErr) {
         return new Response(
-          JSON.stringify({ error: `Failed to store updated chunks: ${chunkErr.message}` }),
+          JSON.stringify({ error: `Ingest RPC failed: ${ingestErr.message}` }),
           { status: 500, headers },
         );
       }
-
-      // Audit log entry for content update (via RPC, single implementation)
-      await supabase.rpc("cerefox_create_audit_entry", {
-        p_document_id: existingDoc.id,
-        p_operation: "update-content",
-        p_author: author,
-        p_author_type: author_type,
-        p_size_after: totalChars,
-        p_description: `Updated content for '${existingDoc.title}' (${chunks.length} chunks, ${totalChars} chars)`,
-      });
 
       return new Response(
         JSON.stringify({
@@ -454,30 +437,42 @@ Deno.serve(async (req: Request) => {
   }
 
   const totalChars = chunks.reduce((s, c) => s + c.char_count, 0);
+  const reviewStatus = author_type === "agent" ? "pending_review" : "approved";
 
-  // Insert document record
-  const { data: docRows, error: docErr } = await supabase
-    .from("cerefox_documents")
-    .insert({
-      title: title.trim(),
-      source,
-      content_hash: contentHash,
-      metadata,
-      chunk_count: chunks.length,
-      total_chars: totalChars,
-    })
-    .select("id");
+  // Single RPC handles: insert doc, insert chunks, set review_status, audit entry
+  const chunkData = chunks.map((chunk, i) => ({
+    chunk_index: i,
+    heading_path: chunk.heading_path,
+    heading_level: chunk.heading_level,
+    title: chunk.title,
+    content: chunk.content,
+    char_count: chunk.char_count,
+    embedding: embeddings[i],
+    embedder: OPENAI_MODEL,
+  }));
 
-  if (docErr || !docRows?.length) {
+  const { data: ingestResult, error: ingestErr } = await supabase.rpc("cerefox_ingest_document", {
+    p_document_id: null,
+    p_title: title.trim(),
+    p_source: source,
+    p_content_hash: contentHash,
+    p_metadata: metadata,
+    p_review_status: reviewStatus,
+    p_chunks: chunkData,
+    p_author: author,
+    p_author_type: author_type,
+  });
+
+  if (ingestErr || !ingestResult?.length) {
     return new Response(
-      JSON.stringify({ error: `Failed to create document: ${docErr?.message ?? "no data"}` }),
+      JSON.stringify({ error: `Ingest RPC failed: ${ingestErr?.message ?? "no data returned"}` }),
       { status: 500, headers },
     );
   }
 
-  const documentId = docRows[0].id;
+  const documentId = ingestResult[0].document_id;
 
-  // Resolve / create project if requested
+  // Resolve / create project if requested (separate from ingestion -- pure CRUD)
   let projectId: string | null = null;
   if (project_name) {
     const { data: proj } = await supabase
@@ -502,40 +497,6 @@ Deno.serve(async (req: Request) => {
         .insert({ document_id: documentId, project_id: projectId });
     }
   }
-
-  // Insert chunks with embeddings
-  const chunkRows = chunks.map((chunk, i) => ({
-    document_id: documentId,
-    chunk_index: i,
-    heading_path: chunk.heading_path,
-    heading_level: chunk.heading_level,
-    title: chunk.title,
-    content: chunk.content,
-    char_count: chunk.char_count,
-    embedding_primary: embeddings[i],
-    embedder_primary: OPENAI_MODEL,
-  }));
-
-  const { error: chunkErr } = await supabase.from("cerefox_chunks").insert(chunkRows);
-
-  if (chunkErr) {
-    // Clean up the document on chunk insert failure
-    await supabase.from("cerefox_documents").delete().eq("id", documentId);
-    return new Response(
-      JSON.stringify({ error: `Failed to store chunks: ${chunkErr.message}` }),
-      { status: 500, headers },
-    );
-  }
-
-  // Audit log entry for document creation (via RPC, single implementation)
-  await supabase.rpc("cerefox_create_audit_entry", {
-    p_document_id: documentId,
-    p_operation: "create",
-    p_author: author,
-    p_author_type: author_type,
-    p_size_after: totalChars,
-    p_description: `Created document '${title.trim()}' (${chunks.length} chunks, ${totalChars} chars)`,
-  });
 
   return new Response(
     JSON.stringify({
