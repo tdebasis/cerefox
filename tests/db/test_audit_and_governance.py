@@ -1,0 +1,409 @@
+"""Tests for audit log, review status, and version archival.
+
+Tests cover:
+  - Audit log: create_audit_entry inserts correct data, list_audit_entries filters
+  - Review status: set_review_status validates values, creates audit entry, updates doc
+  - Version archival: set_version_archived sets flag, creates audit entry
+  - Pipeline integration: author/author_type threading, review_status auto-transition
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+
+from cerefox.config import Settings
+from cerefox.db.client import CerefoxClient
+
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def mock_supabase():
+    """A Supabase client mock with chainable table/rpc calls."""
+    client = MagicMock()
+    table_mock = MagicMock()
+    table_mock.select.return_value = table_mock
+    table_mock.insert.return_value = table_mock
+    table_mock.update.return_value = table_mock
+    table_mock.delete.return_value = table_mock
+    table_mock.eq.return_value = table_mock
+    table_mock.is_.return_value = table_mock
+    table_mock.gte.return_value = table_mock
+    table_mock.lte.return_value = table_mock
+    table_mock.order.return_value = table_mock
+    table_mock.limit.return_value = table_mock
+    table_mock.execute.return_value = MagicMock(data=[], count=0)
+    client.table.return_value = table_mock
+    return client
+
+
+@pytest.fixture()
+def cerefox_client(mock_supabase):
+    settings = Settings(_env_file=None)
+    settings.supabase_url = "https://example.supabase.co"
+    settings.supabase_key = "test-key"
+    c = CerefoxClient(settings)
+    c._client = mock_supabase
+    return c
+
+
+# ── Audit log: create_audit_entry ────────────────────────────────────────────
+
+
+class TestCreateAuditEntry:
+    def test_inserts_into_audit_log_table(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001", "operation": "create"}]
+        )
+        result = cerefox_client.create_audit_entry(
+            operation="create",
+            author="fotis",
+            author_type="user",
+            document_id="doc-001",
+            size_after=500,
+            description="Created test doc",
+        )
+        mock_supabase.table.assert_called_with("cerefox_audit_log")
+        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert insert_call["operation"] == "create"
+        assert insert_call["author"] == "fotis"
+        assert insert_call["author_type"] == "user"
+        assert insert_call["document_id"] == "doc-001"
+        assert insert_call["size_after"] == 500
+        assert insert_call["description"] == "Created test doc"
+
+    def test_omits_nullable_fields_when_not_provided(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-002"}]
+        )
+        cerefox_client.create_audit_entry(operation="delete", author="system")
+        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert "document_id" not in insert_call
+        assert "version_id" not in insert_call
+        assert "size_before" not in insert_call
+        assert "size_after" not in insert_call
+
+    def test_invalid_author_type_defaults_to_user(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-003"}]
+        )
+        cerefox_client.create_audit_entry(
+            operation="create", author_type="invalid_type"
+        )
+        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert insert_call["author_type"] == "user"
+
+    def test_agent_author_type_preserved(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-004"}]
+        )
+        cerefox_client.create_audit_entry(
+            operation="update-content", author="Claude Code", author_type="agent"
+        )
+        insert_call = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert insert_call["author_type"] == "agent"
+        assert insert_call["author"] == "Claude Code"
+
+
+# ── Audit log: list_audit_entries ────────────────────────────────────────────
+
+
+class TestListAuditEntries:
+    def test_queries_with_no_filters(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries()
+        mock_supabase.table.assert_called_with("cerefox_audit_log")
+
+    def test_filters_by_document_id(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries(document_id="doc-001")
+        mock_supabase.table.return_value.select.return_value.order.return_value.limit.return_value.eq.assert_called_with(
+            "document_id", "doc-001"
+        )
+
+    def test_filters_by_author(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries(author="fotis")
+        # The chain is: select -> order -> limit -> eq(author)
+        # Exact call depends on chaining order; just verify eq is called
+        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
+        assert any("'author'" in c for c in calls)
+
+    def test_filters_by_since_timestamp(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries(since="2026-03-22T00:00:00Z")
+        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
+        assert any("'created_at'" in c for c in calls)
+
+    def test_respects_limit(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries(limit=10)
+        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
+        assert any("10" in c for c in calls)
+
+
+# ── Review status ────────────────────────────────────────────────────────────
+
+
+class TestSetReviewStatus:
+    def test_valid_status_approved(self, cerefox_client, mock_supabase):
+        # set_review_status calls: get_document_by_id (select), update (documents), insert (audit_log)
+        # Since mock returns same table_mock for all table() calls, just verify no error raised
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "pending_review"}]
+        )
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "approved"}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        # Should not raise
+        cerefox_client.set_review_status("doc-001", "approved", author="fotis")
+
+    def test_valid_status_pending_review(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "pending_review"}]
+        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "approved"}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_review_status("doc-001", "pending_review")
+
+    def test_invalid_status_raises_value_error(self, cerefox_client):
+        with pytest.raises(ValueError, match="Invalid review_status"):
+            cerefox_client.set_review_status("doc-001", "archived")
+
+    def test_creates_audit_entry_on_status_change(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "approved"}]
+        )
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "doc-001", "review_status": "pending_review"}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_review_status("doc-001", "approved", author="fotis")
+        # Verify audit_log insert was called (among other table calls)
+        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
+        assert "cerefox_audit_log" in table_calls
+
+
+# ── Version archival ─────────────────────────────────────────────────────────
+
+
+class TestSetVersionArchived:
+    def test_archive_calls_update_with_true(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 2, "archived": True}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_version_archived("ver-001", True, author="fotis")
+        # Verify update was called with archived=True
+        mock_supabase.table.return_value.update.assert_called_with({"archived": True})
+
+    def test_unarchive_calls_update_with_false(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 2, "archived": False}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_version_archived("ver-001", False)
+        mock_supabase.table.return_value.update.assert_called_with({"archived": False})
+
+    def test_creates_audit_entry_for_archive(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 3, "archived": True}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_version_archived("ver-001", True, author="fotis")
+        # Check audit_log table was accessed
+        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
+        assert "cerefox_audit_log" in table_calls
+
+    def test_creates_audit_entry_for_unarchive(self, cerefox_client, mock_supabase):
+        mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=[{"id": "ver-001", "document_id": "doc-001", "version_number": 3, "archived": False}]
+        )
+        mock_supabase.table.return_value.insert.return_value.execute.return_value = MagicMock(
+            data=[{"id": "audit-001"}]
+        )
+        cerefox_client.set_version_archived("ver-001", False, author="fotis")
+        table_calls = [c[0][0] for c in mock_supabase.table.call_args_list]
+        assert "cerefox_audit_log" in table_calls
+
+
+# ── Pipeline: author_type threading and review_status auto-transition ────────
+
+
+class TestPipelineAuditIntegration:
+    """Test that the ingestion pipeline correctly threads author/author_type
+    and triggers review_status auto-transitions."""
+
+    @pytest.fixture()
+    def pipeline(self):
+        from cerefox.ingestion.pipeline import IngestionPipeline
+
+        mock_client = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.model_name = "test-model"
+        settings = Settings(_env_file=None)
+        settings.supabase_url = "https://example.supabase.co"
+        settings.supabase_key = "test-key"
+        p = IngestionPipeline(mock_client, mock_embedder, settings)
+        return p, mock_client, mock_embedder
+
+    def test_ingest_text_passes_author_and_author_type_to_audit(self, pipeline):
+        p, mock_client, mock_embedder = pipeline
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.insert_document.return_value = {"id": "doc-new"}
+        mock_embedder.embed_batch.return_value = [[0.1] * 768]
+        mock_client.insert_chunks.return_value = []
+        mock_client.create_audit_entry.return_value = {}
+
+        p.ingest_text(
+            "# Test\n\nBody", "Test", author="Claude Code", author_type="agent"
+        )
+
+        mock_client.create_audit_entry.assert_called_once()
+        audit_kwargs = mock_client.create_audit_entry.call_args
+        assert audit_kwargs.kwargs.get("author") == "Claude Code" or \
+               audit_kwargs[1].get("author") == "Claude Code"
+        assert audit_kwargs.kwargs.get("author_type") == "agent" or \
+               audit_kwargs[1].get("author_type") == "agent"
+
+    def test_update_document_agent_sets_pending_review(self, pipeline):
+        p, mock_client, mock_embedder = pipeline
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-001", "content_hash": "old-hash",
+            "chunk_count": 1, "total_chars": 50, "review_status": "approved",
+        }
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.list_chunks_for_document.return_value = [{"id": "chunk-1"}]
+        mock_client.snapshot_version.return_value = {
+            "version_id": "ver-001", "version_number": 1,
+            "chunk_count": 1, "total_chars": 50,
+        }
+        mock_client.update_document.return_value = {"id": "doc-001"}
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.1] * 768]
+        mock_client.insert_chunks.return_value = []
+        mock_client.create_audit_entry.return_value = {}
+
+        p.update_document(
+            "doc-001", "# New\n\nChanged content", "New",
+            author="Claude Code", author_type="agent"
+        )
+
+        # update_document is called twice: once for content, once for review_status
+        update_calls = mock_client.update_document.call_args_list
+        assert len(update_calls) == 2
+        # The second call should set review_status to pending_review
+        status_call = update_calls[1]
+        assert status_call[0][1] == {"review_status": "pending_review"}
+
+    def test_update_document_user_sets_approved(self, pipeline):
+        p, mock_client, mock_embedder = pipeline
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-001", "content_hash": "old-hash",
+            "chunk_count": 1, "total_chars": 50, "review_status": "pending_review",
+        }
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.list_chunks_for_document.return_value = [{"id": "chunk-1"}]
+        mock_client.snapshot_version.return_value = {
+            "version_id": "ver-001", "version_number": 1,
+            "chunk_count": 1, "total_chars": 50,
+        }
+        mock_client.update_document.return_value = {"id": "doc-001"}
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.1] * 768]
+        mock_client.insert_chunks.return_value = []
+        mock_client.create_audit_entry.return_value = {}
+
+        p.update_document(
+            "doc-001", "# New\n\nChanged by human", "New",
+            author="fotis", author_type="user"
+        )
+
+        update_calls = mock_client.update_document.call_args_list
+        assert len(update_calls) == 2
+        status_call = update_calls[1]
+        assert status_call[0][1] == {"review_status": "approved"}
+
+    def test_metadata_only_update_does_not_change_review_status(self, pipeline):
+        """When content is unchanged, review_status should not be modified."""
+        p, mock_client, mock_embedder = pipeline
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-001",
+            "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "chunk_count": 0, "total_chars": 0, "review_status": "pending_review",
+        }
+        mock_client.list_chunks_for_document.return_value = [{"id": "chunk-1"}]
+        mock_client.update_document.return_value = {"id": "doc-001"}
+        mock_client.get_document_project_ids.return_value = []
+        mock_client.create_audit_entry.return_value = {}
+
+        p.update_document(
+            "doc-001", "", "Updated Title",  # empty string hashes to e3b0c4...
+            author="fotis", author_type="user"
+        )
+
+        # Only one update_document call (metadata), no review_status change
+        assert mock_client.update_document.call_count == 1
+        update_data = mock_client.update_document.call_args[0][1]
+        assert "review_status" not in update_data
+
+
+# ── Config: version_cleanup_enabled ──────────────────────────────────────────
+
+
+class TestVersionCleanupEnabled:
+    def test_default_is_true(self):
+        settings = Settings(_env_file=None)
+        assert settings.version_cleanup_enabled is True
+
+    def test_can_be_set_to_false(self):
+        settings = Settings(_env_file=None, version_cleanup_enabled=False)
+        assert settings.version_cleanup_enabled is False
+
+    def test_cleanup_enabled_passed_to_snapshot_version(self):
+        """When version_cleanup_enabled=False, snapshot_version gets cleanup_enabled=False."""
+        from cerefox.ingestion.pipeline import IngestionPipeline
+
+        mock_client = MagicMock()
+        mock_embedder = MagicMock()
+        mock_embedder.model_name = "test-model"
+        settings = Settings(_env_file=None)
+        settings.supabase_url = "https://example.supabase.co"
+        settings.supabase_key = "test-key"
+        settings.version_cleanup_enabled = False
+
+        p = IngestionPipeline(mock_client, mock_embedder, settings)
+
+        mock_client.get_document_by_id.return_value = {
+            "id": "doc-001", "content_hash": "old-hash",
+            "chunk_count": 1, "total_chars": 50,
+        }
+        mock_client.get_document_by_hash.return_value = None
+        mock_client.list_chunks_for_document.return_value = [{"id": "c1"}]
+        mock_client.snapshot_version.return_value = {
+            "version_id": "v1", "version_number": 1, "chunk_count": 1, "total_chars": 50
+        }
+        mock_client.update_document.return_value = {"id": "doc-001"}
+        mock_client.get_document_project_ids.return_value = []
+        mock_embedder.embed_batch.return_value = [[0.1] * 768]
+        mock_client.insert_chunks.return_value = []
+        mock_client.create_audit_entry.return_value = {}
+
+        p.update_document("doc-001", "# New\n\nChanged", "New")
+
+        mock_client.snapshot_version.assert_called_once_with(
+            "doc-001", source="manual", retention_hours=48, cleanup_enabled=False
+        )
