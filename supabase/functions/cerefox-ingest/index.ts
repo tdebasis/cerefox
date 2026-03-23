@@ -35,6 +35,8 @@ interface IngestRequest {
   source?: string;
   metadata?: Record<string, unknown>;
   update_if_exists?: boolean;
+  author?: string;
+  author_type?: string; // 'user' | 'agent'
 }
 
 interface Chunk {
@@ -279,7 +281,7 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  const { title, content, project_name, source = "agent", metadata = {}, update_if_exists = false } = body;
+  const { title, content, project_name, source = "agent", metadata = {}, update_if_exists = false, author = "agent", author_type = "agent" } = body;
 
   if (!title?.trim() || !content?.trim()) {
     return new Response(JSON.stringify({ error: "title and content are required" }), {
@@ -359,10 +361,11 @@ Deno.serve(async (req: Request) => {
         );
       }
 
-      // Update document record
+      // Update document record + review_status based on author_type
+      const reviewStatus = author_type === "agent" ? "pending_review" : "approved";
       await supabase
         .from("cerefox_documents")
-        .update({ content_hash: contentHash, chunk_count: chunks.length, total_chars: totalChars })
+        .update({ content_hash: contentHash, chunk_count: chunks.length, total_chars: totalChars, review_status: reviewStatus })
         .eq("id", existingDoc.id);
 
       // Insert new chunks
@@ -386,6 +389,16 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      // Audit log entry for content update (via RPC, single implementation)
+      await supabase.rpc("cerefox_create_audit_entry", {
+        p_document_id: existingDoc.id,
+        p_operation: "update-content",
+        p_author: author,
+        p_author_type: author_type,
+        p_size_after: totalChars,
+        p_description: `Updated content for '${existingDoc.title}' (${chunks.length} chunks, ${totalChars} chars)`,
+      });
+
       return new Response(
         JSON.stringify({
           document_id: existingDoc.id,
@@ -397,7 +410,7 @@ Deno.serve(async (req: Request) => {
         { headers },
       );
     }
-    // No match found — fall through to normal create below
+    // No match found -- fall through to normal create below
   }
 
   // ── Hash deduplication (normal create path) ────────────────────────────────
@@ -513,6 +526,16 @@ Deno.serve(async (req: Request) => {
       { status: 500, headers },
     );
   }
+
+  // Audit log entry for document creation (via RPC, single implementation)
+  await supabase.rpc("cerefox_create_audit_entry", {
+    p_document_id: documentId,
+    p_operation: "create",
+    p_author: author,
+    p_author_type: author_type,
+    p_size_after: totalChars,
+    p_description: `Created document '${title.trim()}' (${chunks.length} chunks, ${totalChars} chars)`,
+  });
 
   return new Response(
     JSON.stringify({

@@ -26,20 +26,25 @@ CREATE TABLE IF NOT EXISTS cerefox_projects (
 -- Full content lives exclusively in cerefox_chunks — there is no content column here.
 
 CREATE TABLE IF NOT EXISTS cerefox_documents (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    title        TEXT        NOT NULL,
-    source       TEXT        NOT NULL DEFAULT 'manual',
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    title           TEXT        NOT NULL,
+    source          TEXT        NOT NULL DEFAULT 'manual',
     -- source values: 'file' | 'paste' | 'agent' | 'url' | 'manual'
-    source_path  TEXT,
+    source_path     TEXT,
     -- SHA-256 of raw markdown content; used for deduplication
-    content_hash TEXT        NOT NULL,
-    metadata     JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    chunk_count  INT         NOT NULL DEFAULT 0,
-    total_chars  INT         NOT NULL DEFAULT 0,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    content_hash    TEXT        NOT NULL,
+    metadata        JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    chunk_count     INT         NOT NULL DEFAULT 0,
+    total_chars     INT         NOT NULL DEFAULT 0,
+    -- review_status: human governance flag. 'approved' = validated by human,
+    -- 'pending_review' = modified by agent, not yet reviewed.
+    -- Content is searchable in both states.
+    review_status   TEXT        NOT NULL DEFAULT 'approved',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    CONSTRAINT cerefox_documents_hash_unique UNIQUE (content_hash)
+    CONSTRAINT cerefox_documents_hash_unique UNIQUE (content_hash),
+    CONSTRAINT cerefox_documents_review_status_check CHECK (review_status IN ('approved', 'pending_review'))
 );
 
 -- ── Document versions ──────────────────────────────────────────────────────────
@@ -61,9 +66,46 @@ CREATE TABLE IF NOT EXISTS cerefox_document_versions (
     -- Stats snapshotted at archive time (chunk_count and total_chars of the archived content)
     chunk_count     INT         NOT NULL DEFAULT 0,
     total_chars     INT         NOT NULL DEFAULT 0,
+    -- archived: when true, this version is protected from retention cleanup.
+    -- Set via the version archival API. Default: false (eligible for cleanup).
+    archived        BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT cerefox_document_versions_doc_num_unique UNIQUE (document_id, version_number)
+);
+
+-- ── Audit log ────────────────────────────────────────────────────────────────
+-- Immutable, append-only record of all write operations against the knowledge base.
+-- No UPDATE or DELETE allowed (enforced by RLS policy with no update/delete grants).
+-- Audit entries persist regardless of version cleanup.
+--
+-- document_id is nullable to support logging operations on deleted documents
+-- (the audit entry survives the document deletion).
+-- version_id links to the version snapshot created by the operation (if any).
+
+CREATE TABLE IF NOT EXISTS cerefox_audit_log (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id     UUID        REFERENCES cerefox_documents(id) ON DELETE SET NULL,
+    version_id      UUID        REFERENCES cerefox_document_versions(id) ON DELETE SET NULL,
+    operation       TEXT        NOT NULL,
+    -- operation values: 'create', 'update-content', 'update-metadata', 'delete',
+    --                   'status-change', 'archive', 'unarchive'
+    author          TEXT        NOT NULL DEFAULT 'unknown',
+    -- author: human username, agent name/model, or 'system' for automated actions
+    author_type     TEXT        NOT NULL DEFAULT 'user',
+    -- author_type: 'user' (human via web UI/CLI) or 'agent' (AI via MCP/Edge Function)
+    size_before     INT,
+    size_after      INT,
+    description     TEXT        NOT NULL DEFAULT '',
+    -- description: free-text explaining what changed and why.
+    -- Auto-generated for system actions (approval, archival, retention cleanup).
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT cerefox_audit_log_operation_check CHECK (
+        operation IN ('create', 'update-content', 'update-metadata', 'delete',
+                      'status-change', 'archive', 'unarchive')
+    ),
+    CONSTRAINT cerefox_audit_log_author_type_check CHECK (author_type IN ('user', 'agent'))
 );
 
 -- ── Document ↔ Project junction ───────────────────────────────────────────────
@@ -177,9 +219,24 @@ CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_doc
 CREATE INDEX IF NOT EXISTS idx_cerefox_document_projects_project
     ON cerefox_document_projects(project_id);
 
--- Document versions lookup — find all versions for a document, ordered by date
+-- Document versions lookup -- find all versions for a document, ordered by date
 CREATE INDEX IF NOT EXISTS idx_cerefox_document_versions_doc
     ON cerefox_document_versions(document_id, created_at DESC);
+
+-- Audit log indexes -- support temporal, author, and document-scoped queries
+CREATE INDEX IF NOT EXISTS idx_cerefox_audit_log_created
+    ON cerefox_audit_log(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cerefox_audit_log_document
+    ON cerefox_audit_log(document_id, created_at DESC)
+    WHERE document_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_cerefox_audit_log_author
+    ON cerefox_audit_log(author, created_at DESC);
+
+-- Full-text search on audit log descriptions
+CREATE INDEX IF NOT EXISTS idx_cerefox_audit_log_desc_fts
+    ON cerefox_audit_log USING GIN(to_tsvector('english', description));
 
 -- ── updated_at trigger ────────────────────────────────────────────────────────
 
@@ -251,4 +308,5 @@ ALTER TABLE cerefox_documents             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_chunks                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_document_projects     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_document_versions     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_audit_log              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_migrations            ENABLE ROW LEVEL SECURITY;

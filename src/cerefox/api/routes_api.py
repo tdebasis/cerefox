@@ -100,6 +100,7 @@ class DocumentVersionResponse(BaseModel):
     source: str
     chunk_count: int
     total_chars: int
+    archived: bool = False
     created_at: str
 
 
@@ -113,6 +114,7 @@ def api_search(
     project_id: str = "",
     count: int = Query(default=10, ge=1, le=50),
     metadata_filter: str = "",
+    review_status: str = "",
     client: CerefoxClient = Depends(get_client),
     embedder: Embedder | None = Depends(get_embedder),
     settings: Settings = Depends(get_settings),
@@ -221,11 +223,24 @@ def api_search(
                 "doc_metadata": r.doc_metadata,
             })
 
+    # Post-filter by review_status (docs mode only -- chunk modes don't have it)
+    if review_status and review_status in ("approved", "pending_review") and mode == "docs":
+        doc_ids = [r["document_id"] for r in result_dicts]
+        if doc_ids:
+            status_map = {}
+            for did in doc_ids:
+                doc_record = client.get_document_by_id(did)
+                if doc_record:
+                    status_map[did] = doc_record.get("review_status", "approved")
+            result_dicts = [
+                r for r in result_dicts if status_map.get(r["document_id"]) == review_status
+            ]
+
     return SearchResponse(
         results=result_dicts,
         query=q,
         mode=mode,
-        total_found=resp.total_found,
+        total_found=len(result_dicts),
         response_bytes=resp.response_bytes,
         truncated=resp.truncated,
     )
@@ -283,6 +298,7 @@ class DashboardDocResponse(BaseModel):
     source: str | None = None
     chunk_count: int = 0
     total_chars: int = 0
+    review_status: str = "approved"
     updated_at: str | None = None
     project_ids: list[str] = []
 
@@ -318,6 +334,7 @@ def api_dashboard(
             source=d.get("source"),
             chunk_count=d.get("chunk_count") or 0,
             total_chars=d.get("total_chars") or 0,
+            review_status=d.get("review_status", "approved"),
             updated_at=d.get("updated_at"),
             project_ids=pid_list,
         ))
@@ -357,6 +374,7 @@ def api_project_documents(
             source=d.get("source"),
             chunk_count=d.get("chunk_count") or 0,
             total_chars=d.get("total_chars") or 0,
+            review_status=d.get("review_status", "approved"),
             updated_at=d.get("updated_at"),
             project_ids=[p["id"] for p in doc_projects_map.get(d["id"], [])],
         )
@@ -376,6 +394,7 @@ class DocumentDetailResponse(BaseModel):
     total_chars: int = 0
     chunk_count: int = 0
     project_ids: list[str] = []
+    review_status: str = "approved"
     created_at: str | None = None
     updated_at: str | None = None
     versions: list[DocumentVersionResponse] = []
@@ -451,6 +470,7 @@ def api_get_document(
         total_chars=doc.get("total_chars", 0),
         chunk_count=doc.get("chunk_count", 0),
         project_ids=project_ids,
+        review_status=meta.get("review_status", "approved") if meta else "approved",
         created_at=meta.get("created_at") if meta else None,
         updated_at=meta.get("updated_at") if meta else None,
         versions=[
@@ -460,6 +480,7 @@ def api_get_document(
                 source=v.get("source", ""),
                 chunk_count=v.get("chunk_count", 0),
                 total_chars=v.get("total_chars", 0),
+                archived=v.get("archived", False),
                 created_at=v.get("created_at", ""),
             )
             for v in versions
@@ -582,6 +603,8 @@ def api_edit_document(
             title=body.title.strip(),
             project_ids=body.project_ids if body.project_ids else None,
             metadata=body.metadata if body.metadata else None,
+            author="web-ui",
+            author_type="user",
         )
         return EditResponse(success=True, reindexed=result.reindexed)
     except Exception as exc:
@@ -627,6 +650,8 @@ async def api_upload_content(
             document_id=document_id,
             text=text,
             title=existing.get("title", file.filename or "Untitled"),
+            author="web-ui",
+            author_type="user",
         )
         return EditResponse(success=True, reindexed=result.reindexed)
     except Exception as exc:
@@ -660,6 +685,8 @@ def api_ingest_paste(
             project_ids=body.project_ids if body.project_ids else None,
             metadata=body.metadata if body.metadata else None,
             update_existing=body.update_existing,
+            author="web-ui",
+            author_type="user",
         )
         return IngestResponse(
             success=not res.skipped,
@@ -705,6 +732,8 @@ async def api_ingest_file(
             text, doc_title, source="file", source_path=file.filename,
             project_ids=pids, metadata=meta,
             update_existing=update_existing,
+            author="web-ui",
+            author_type="user",
         )
         return IngestResponse(
             success=not res.skipped,
@@ -811,3 +840,101 @@ def api_delete_project(
         return {"success": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Audit log ────────────────────────────────────────────────────────────────
+
+
+class AuditEntryResponse(BaseModel):
+    id: str
+    document_id: str | None = None
+    doc_title: str | None = None
+    version_id: str | None = None
+    operation: str
+    author: str
+    author_type: str
+    size_before: int | None = None
+    size_after: int | None = None
+    description: str = ""
+    created_at: str
+
+
+@api_router.get("/audit-log")
+def api_list_audit_entries(
+    document_id: str | None = Query(None),
+    author: str | None = Query(None),
+    operation: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    client: CerefoxClient = Depends(get_client),
+) -> list[AuditEntryResponse]:
+    """List audit log entries with optional filters.
+
+    Supports temporal queries ("what changed since X"), author filtering,
+    operation filtering, and document scoping.
+    """
+    raw = client.list_audit_entries(
+        document_id=document_id,
+        author=author,
+        operation=operation,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    return [
+        AuditEntryResponse(
+            id=e["id"],
+            document_id=e.get("document_id"),
+            doc_title=e.get("doc_title"),
+            version_id=e.get("version_id"),
+            operation=e["operation"],
+            author=e.get("author", "unknown"),
+            author_type=e.get("author_type", "user"),
+            size_before=e.get("size_before"),
+            size_after=e.get("size_after"),
+            description=e.get("description", ""),
+            created_at=e.get("created_at", ""),
+        )
+        for e in raw
+    ]
+
+
+# ── Review status ────────────────────────────────────────────────────────────
+
+
+class ReviewStatusRequest(BaseModel):
+    status: str  # 'approved' or 'pending_review'
+
+
+@api_router.post("/documents/{document_id}/review-status")
+def api_set_review_status(
+    document_id: str,
+    body: ReviewStatusRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, str]:
+    """Set the review status of a document. Creates an audit entry."""
+    try:
+        client.set_review_status(document_id, body.status, author="user")
+        return {"status": body.status}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ── Version archival ─────────────────────────────────────────────────────────
+
+
+class VersionArchiveRequest(BaseModel):
+    archived: bool
+
+
+@api_router.post("/documents/{document_id}/versions/{version_id}/archive")
+def api_set_version_archived(
+    document_id: str,
+    version_id: str,
+    body: VersionArchiveRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, bool]:
+    """Set or clear the archived flag on a version. Creates an audit entry."""
+    client.set_version_archived(version_id, body.archived, author="user")
+    return {"archived": body.archived}

@@ -52,7 +52,9 @@ Cerefox is **asynchronous shared memory, not a message bus**. It solves the pers
 
 ## Getting Started
 
-> **Full walkthrough**: `docs/guides/quickstart.md` — zero to first ingested document and connected agent in 15 minutes.
+> **Full walkthrough**: `docs/guides/quickstart.md` -- zero to first ingested document and connected agent in 15 minutes.
+>
+> **Upgrading?** If you are upgrading from a previous version, see the [Upgrading Guide](docs/guides/upgrading.md) for migration steps.
 
 ### 1. Clone and install
 
@@ -229,6 +231,7 @@ Full setup for all options: `docs/guides/connect-agents.md`
 | `docs/guides/ops-scripts.md` | Backup, restore, migrate, sync docs |
 | `docs/guides/setup-cloud-run.md` | Google Cloud Run deployment |
 | `docs/guides/operational-cost.md` | Cost breakdown for all deployment options |
+| `docs/guides/upgrading.md` | Standard upgrade checklist, version-specific notes |
 | `docs/guides/contributing.md` | Adding embedders, converters, commands |
 
 ---

@@ -1,6 +1,8 @@
-# Quickstart — Zero to First Document in 15 Minutes
+# Quickstart -- Zero to First Document in 15 Minutes
 
 Get Cerefox running locally and ingest your first document.
+
+> **Upgrading from a previous version?** See the [Upgrading Guide](upgrading.md) for migration steps instead.
 
 ---
 

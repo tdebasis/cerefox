@@ -64,6 +64,15 @@ export async function checkFilename(
   return apiFetch<FilenameCheckResponse>(`/check-filename${qs}`);
 }
 
+export async function fetchDocumentVersion(
+  documentId: string,
+  versionId: string,
+): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(
+    `/documents/${documentId}?version_id=${versionId}`,
+  );
+}
+
 export function getDownloadUrl(
   documentId: string,
   versionId?: string,

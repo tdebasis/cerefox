@@ -65,6 +65,7 @@ class TestSnapshotVersion:
                 "p_document_id": "doc-001",
                 "p_source": "file",
                 "p_retention_hours": 48,
+                "p_cleanup_enabled": True,
             },
         )
         assert result["version_id"] == "v-001"

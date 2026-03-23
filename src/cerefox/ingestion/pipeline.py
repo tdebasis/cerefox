@@ -102,6 +102,8 @@ class IngestionPipeline:
         project_ids: list[str] | None = None,
         metadata: dict | None = None,
         update_existing: bool = False,
+        author: str = "unknown",
+        author_type: str = "user",
     ) -> IngestResult:
         """Ingest a raw markdown string.
 
@@ -149,6 +151,8 @@ class IngestionPipeline:
                     source=source,
                     project_ids=resolved_ids if resolved_ids else None,
                     metadata=metadata,
+                    author=author,
+                    author_type=author_type,
                 )
             log.info("update_existing: no existing doc found — creating new document")
 
@@ -231,6 +235,19 @@ class IngestionPipeline:
             self._client.insert_chunks(chunk_rows)
             log.info("Stored %d chunks for document %s", len(chunks), document_id)
 
+        # ── Audit log entry ───────────────────────────────────────────────
+        try:
+            self._client.create_audit_entry(
+                operation="create",
+                author=author,
+                author_type=author_type,
+                document_id=document_id,
+                size_after=total_chars,
+                description=f"Created document '{title}' ({len(chunks)} chunks, {total_chars} chars)",
+            )
+        except Exception as exc:
+            log.warning("Failed to create audit entry for document %s: %s", document_id, exc)
+
         return IngestResult(
             document_id=document_id,
             title=title,
@@ -249,6 +266,8 @@ class IngestionPipeline:
         project_id: str | None = None,
         project_ids: list[str] | None = None,
         metadata: dict | None = None,
+        author: str = "unknown",
+        author_type: str = "user",
     ) -> IngestResult:
         """Re-ingest an existing document in place, preserving its ID.
 
@@ -330,7 +349,21 @@ class IngestionPipeline:
 
             chunk_count = existing.get("chunk_count") or 0
             total_chars = existing.get("total_chars") or 0
-            log.info("Document %s unchanged — skipped reindex (%d chunks)", document_id, chunk_count)
+            log.info("Document %s unchanged -- skipped reindex (%d chunks)", document_id, chunk_count)
+
+            try:
+                self._client.create_audit_entry(
+                    operation="update-metadata",
+                    author=author,
+                    author_type=author_type,
+                    document_id=document_id,
+                    size_before=total_chars,
+                    size_after=total_chars,
+                    description=f"Updated metadata for '{title}' (content unchanged)",
+                )
+            except Exception as exc:
+                log.warning("Failed to create audit entry for document %s: %s", document_id, exc)
+
             return IngestResult(
                 document_id=document_id,
                 title=title,
@@ -363,6 +396,7 @@ class IngestionPipeline:
             document_id,
             source=source,
             retention_hours=s.version_retention_hours,
+            cleanup_enabled=s.version_cleanup_enabled,
         )
         log.info(
             "Archived %d chunks for document %s as version %d (id=%s)",
@@ -410,6 +444,35 @@ class IngestionPipeline:
             ]
             self._client.insert_chunks(chunk_rows)
             log.info("Re-stored %d chunks for document %s", len(chunks), document_id)
+
+        # ── Review status auto-transition ─────────────────────────────────
+        # Agent content changes set review_status to pending_review.
+        # Human content changes set review_status to approved.
+        # This is purely informational -- documents are always searchable.
+        new_status = "pending_review" if author_type == "agent" else "approved"
+        try:
+            self._client.update_document(document_id, {"review_status": new_status})
+        except Exception as exc:
+            log.warning("Failed to update review_status for %s: %s", document_id, exc)
+
+        # ── Audit log entry ───────────────────────────────────────────────
+        old_chars = existing.get("total_chars") or 0
+        try:
+            self._client.create_audit_entry(
+                operation="update-content",
+                author=author,
+                author_type=author_type,
+                document_id=document_id,
+                version_id=version_info.get("version_id"),
+                size_before=old_chars,
+                size_after=total_chars,
+                description=(
+                    f"Updated content for '{title}' "
+                    f"({old_chars} -> {total_chars} chars, {len(chunks)} chunks)"
+                ),
+            )
+        except Exception as exc:
+            log.warning("Failed to create audit entry for document %s: %s", document_id, exc)
 
         return IngestResult(
             document_id=document_id,

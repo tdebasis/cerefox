@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # always kept regardless of this setting (accidental-deletion protection).
     # Older versions beyond this window are lazily deleted on the next update.
     version_retention_hours: int = 48
+    # When false, all versions are immutable (no cleanup ever runs).
+    # Archived versions (archived=true) are always protected regardless of this setting.
+    version_cleanup_enabled: bool = True
 
     # ── Storage ───────────────────────────────────────────────────────────────
     backup_dir: str = "./backups"

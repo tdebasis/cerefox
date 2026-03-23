@@ -7,21 +7,28 @@ import {
   Divider,
   Group,
   Loader,
+  Modal,
+  SegmentedControl,
   Stack,
   Table,
   Text,
   Title,
 } from "@mantine/core";
 import {
+  IconArrowsDiff,
   IconDownload,
   IconEdit,
+  IconLock,
+  IconLockOpen,
   IconTrash,
 } from "@tabler/icons-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
-import { fetchDocument, fetchChunks, deleteDocument, getDownloadUrl } from "../api/documents";
+import { setReviewStatus, setVersionArchived } from "../api/audit";
+import { fetchDocument, fetchChunks, deleteDocument, fetchDocumentVersion, getDownloadUrl } from "../api/documents";
+import { DiffViewer } from "../components/DiffViewer";
 import { MarkdownViewer } from "../components/MarkdownViewer";
 import { useProjects } from "../hooks/useProjects";
 import { formatDateTime } from "../utils/dates";
@@ -57,6 +64,47 @@ export function DocumentPage() {
     },
     onError: (err) => showError("Delete failed", String(err)),
   });
+
+  const reviewMutation = useMutation({
+    mutationFn: (status: string) => setReviewStatus(id!, status),
+    onSuccess: (_, status) => {
+      queryClient.invalidateQueries({ queryKey: ["document", id] });
+      showSuccess("Review status updated", status === "approved" ? "Approved" : "Pending review");
+    },
+    onError: (err) => showError("Status update failed", String(err)),
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: ({ versionId, archived }: { versionId: string; archived: boolean }) =>
+      setVersionArchived(id!, versionId, archived),
+    onSuccess: (_, { archived }) => {
+      queryClient.invalidateQueries({ queryKey: ["document", id] });
+      showSuccess(archived ? "Version archived" : "Version unarchived",
+        archived ? "Protected from cleanup" : "Eligible for cleanup");
+    },
+    onError: (err) => showError("Archive update failed", String(err)),
+  });
+
+  const [confirmUnarchive, setConfirmUnarchive] = useState<string | null>(null);
+  const [diffVersionId, setDiffVersionId] = useState<string | null>(null);
+  const [diffVersionContent, setDiffVersionContent] = useState<string | null>(null);
+  const [diffVersionLabel, setDiffVersionLabel] = useState("");
+  const [diffLoading, setDiffLoading] = useState(false);
+
+  const openDiff = async (versionId: string, versionNumber: number) => {
+    setDiffLoading(true);
+    setDiffVersionId(versionId);
+    setDiffVersionLabel(`v${versionNumber}`);
+    try {
+      const versionDoc = await fetchDocumentVersion(id!, versionId);
+      setDiffVersionContent(versionDoc.full_content);
+    } catch {
+      showError("Failed to load version content");
+      setDiffVersionId(null);
+    } finally {
+      setDiffLoading(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -106,6 +154,17 @@ export function DocumentPage() {
                 Updated: {formatDateTime(doc.updated_at)}
               </Text>
             )}
+            <SegmentedControl
+              size="xs"
+              value={doc.review_status}
+              onChange={(v) => reviewMutation.mutate(v)}
+              color={doc.review_status === "approved" ? "green" : "yellow"}
+              data={[
+                { label: "Approved", value: "approved" },
+                { label: "Pending Review", value: "pending_review" },
+              ]}
+              disabled={reviewMutation.isPending}
+            />
           </Group>
         </div>
         <Group gap="xs">
@@ -203,6 +262,7 @@ export function DocumentPage() {
                     <Table.Th>Date</Table.Th>
                     <Table.Th>Size</Table.Th>
                     <Table.Th>Chunks</Table.Th>
+                    <Table.Th>Protected</Table.Th>
                     <Table.Th></Table.Th>
                   </Table.Tr>
                 </Table.Thead>
@@ -210,9 +270,12 @@ export function DocumentPage() {
                   {doc.versions.map((v) => (
                     <Table.Tr key={v.version_id}>
                       <Table.Td>
-                        <Badge variant="outline" size="sm">
-                          v{v.version_number}
-                        </Badge>
+                        <Group gap={4}>
+                          <Badge variant="outline" size="sm">
+                            v{v.version_number}
+                          </Badge>
+                          {v.archived && <IconLock size={14} color="var(--mantine-color-blue-6)" />}
+                        </Group>
                       </Table.Td>
                       <Table.Td>
                         <Text size="sm">{formatDateTime(v.created_at)}</Text>
@@ -226,15 +289,78 @@ export function DocumentPage() {
                         <Text size="sm">{v.chunk_count}</Text>
                       </Table.Td>
                       <Table.Td>
-                        <Button
-                          variant="subtle"
-                          size="compact-xs"
-                          leftSection={<IconDownload size={12} />}
-                          component="a"
-                          href={getDownloadUrl(id!, v.version_id)}
-                        >
-                          Download
-                        </Button>
+                        {v.archived ? (
+                          confirmUnarchive === v.version_id ? (
+                            <Group gap={4}>
+                              <Button
+                                size="compact-xs"
+                                color="yellow"
+                                onClick={() => {
+                                  archiveMutation.mutate({ versionId: v.version_id, archived: false });
+                                  setConfirmUnarchive(null);
+                                }}
+                                loading={archiveMutation.isPending}
+                              >
+                                Confirm removal
+                              </Button>
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                onClick={() => setConfirmUnarchive(null)}
+                              >
+                                Cancel
+                              </Button>
+                            </Group>
+                          ) : (
+                            <Badge
+                              variant="light"
+                              size="sm"
+                              color="green"
+                              leftSection={<IconLock size={12} />}
+                              style={{ cursor: "pointer" }}
+                              title="Click to remove protection. This version will become eligible for automatic cleanup."
+                              onClick={() => setConfirmUnarchive(v.version_id)}
+                            >
+                              Yes (archived)
+                            </Badge>
+                          )
+                        ) : (
+                          <Badge
+                            variant="light"
+                            size="sm"
+                            color="yellow"
+                            leftSection={<IconLockOpen size={12} />}
+                            style={{ cursor: "pointer" }}
+                            title="Click to archive. Archived versions are protected from automatic cleanup and retained indefinitely."
+                            onClick={() =>
+                              archiveMutation.mutate({ versionId: v.version_id, archived: true })
+                            }
+                          >
+                            No (will be deleted)
+                          </Badge>
+                        )}
+                      </Table.Td>
+                      <Table.Td>
+                        <Group gap={4}>
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            leftSection={<IconArrowsDiff size={12} />}
+                            onClick={() => openDiff(v.version_id, v.version_number)}
+                            loading={diffLoading && diffVersionId === v.version_id}
+                          >
+                            Diff
+                          </Button>
+                          <Button
+                            variant="subtle"
+                            size="compact-xs"
+                            leftSection={<IconDownload size={12} />}
+                            component="a"
+                            href={getDownloadUrl(id!, v.version_id)}
+                          >
+                            Download
+                          </Button>
+                        </Group>
                       </Table.Td>
                     </Table.Tr>
                   ))}
@@ -300,6 +426,24 @@ export function DocumentPage() {
           </Accordion.Panel>
         </Accordion.Item>
       </Accordion>
+      <Modal
+        opened={diffVersionId !== null && diffVersionContent !== null}
+        onClose={() => {
+          setDiffVersionId(null);
+          setDiffVersionContent(null);
+        }}
+        title={`Diff: ${diffVersionLabel} vs current`}
+        size="xl"
+      >
+        {diffVersionContent !== null && (
+          <DiffViewer
+            oldContent={diffVersionContent}
+            newContent={doc.full_content}
+            oldLabel={diffVersionLabel}
+            newLabel="Current"
+          />
+        )}
+      </Modal>
     </Container>
   );
 }

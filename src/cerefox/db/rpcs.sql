@@ -699,10 +699,12 @@ $$;
 -- Returns: (version_id, version_number, chunk_count, total_chars) of the new version
 
 DROP FUNCTION IF EXISTS cerefox_snapshot_version(UUID, TEXT, INT);
+DROP FUNCTION IF EXISTS cerefox_snapshot_version(UUID, TEXT, INT, BOOLEAN);
 CREATE FUNCTION cerefox_snapshot_version(
-    p_document_id     UUID,
-    p_source          TEXT  DEFAULT 'manual',
-    p_retention_hours INT   DEFAULT 48
+    p_document_id       UUID,
+    p_source            TEXT    DEFAULT 'manual',
+    p_retention_hours   INT     DEFAULT 48,
+    p_cleanup_enabled   BOOLEAN DEFAULT TRUE
 )
 RETURNS TABLE (
     version_id     UUID,
@@ -749,15 +751,20 @@ BEGIN
 
     -- Lazy retention: delete versions outside the retention window,
     -- but always keep the most recently created version (the one we just made).
-    DELETE FROM cerefox_document_versions dv
-    WHERE dv.document_id = p_document_id
-      AND dv.created_at < NOW() - (p_retention_hours || ' hours')::INTERVAL
-      AND dv.id != (
-          SELECT id FROM cerefox_document_versions
-          WHERE document_id = p_document_id
-          ORDER BY created_at DESC
-          LIMIT 1
-      );
+    -- Skip archived versions (archived=true) -- they are protected from cleanup.
+    -- Skip cleanup entirely if p_cleanup_enabled is false (immutable mode).
+    IF p_cleanup_enabled THEN
+        DELETE FROM cerefox_document_versions dv
+        WHERE dv.document_id = p_document_id
+          AND dv.archived IS NOT TRUE
+          AND dv.created_at < NOW() - (p_retention_hours || ' hours')::INTERVAL
+          AND dv.id != (
+              SELECT id FROM cerefox_document_versions
+              WHERE document_id = p_document_id
+              ORDER BY created_at DESC
+              LIMIT 1
+          );
+    END IF;
 
     RETURN QUERY SELECT v_version_id, v_version_number, v_chunk_count, v_total_chars;
 END;
@@ -825,6 +832,7 @@ RETURNS TABLE (
     source         TEXT,
     chunk_count    INT,
     total_chars    INT,
+    archived       BOOLEAN,
     created_at     TIMESTAMPTZ
 )
 LANGUAGE sql
@@ -832,15 +840,113 @@ SECURITY DEFINER
 STABLE
 SET search_path = public, pg_catalog
 AS $$
-    SELECT id, version_number, source, chunk_count, total_chars, created_at
+    SELECT id, version_number, source, chunk_count, total_chars, archived, created_at
     FROM cerefox_document_versions
     WHERE document_id = p_document_id
     ORDER BY created_at DESC;
 $$;
 
--- ── Metadata key discovery RPC ───────────────────────────────────────────────
+-- ── cerefox_create_audit_entry ────────────────────────────────────────────────
+-- Inserts an immutable audit log entry. Called by all access paths (Python
+-- pipeline, Edge Functions, MCP) to maintain the single implementation principle.
+-- Returns the created entry's id and created_at.
+
+DROP FUNCTION IF EXISTS cerefox_create_audit_entry(UUID, UUID, TEXT, TEXT, TEXT, INT, INT, TEXT);
+CREATE FUNCTION cerefox_create_audit_entry(
+    p_document_id   UUID    DEFAULT NULL,
+    p_version_id    UUID    DEFAULT NULL,
+    p_operation     TEXT    DEFAULT 'create',
+    p_author        TEXT    DEFAULT 'unknown',
+    p_author_type   TEXT    DEFAULT 'user',
+    p_size_before   INT     DEFAULT NULL,
+    p_size_after    INT     DEFAULT NULL,
+    p_description   TEXT    DEFAULT ''
+)
+RETURNS TABLE (
+    audit_id    UUID,
+    created_at  TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+    INSERT INTO cerefox_audit_log (
+        document_id, version_id, operation, author, author_type,
+        size_before, size_after, description
+    )
+    VALUES (
+        p_document_id, p_version_id, p_operation, p_author,
+        CASE WHEN p_author_type IN ('user', 'agent') THEN p_author_type ELSE 'user' END,
+        p_size_before, p_size_after, p_description
+    )
+    RETURNING id AS audit_id, cerefox_audit_log.created_at;
+$$;
+
+-- ── cerefox_list_audit_entries ────────────────────────────────────────────────
+-- Returns audit log entries with optional filters. Joins cerefox_documents to
+-- include doc_title. Used by the web UI, Edge Function, and MCP tool.
+--
+-- Parameters:
+--   p_document_id : Filter by document (NULL = all)
+--   p_author      : Filter by author (NULL = all)
+--   p_operation   : Filter by operation type (NULL = all)
+--   p_since       : Return entries created at or after this timestamp (NULL = no lower bound)
+--   p_until       : Return entries created at or before this timestamp (NULL = no upper bound)
+--   p_limit       : Max entries to return (default: 50)
+
+DROP FUNCTION IF EXISTS cerefox_list_audit_entries(UUID, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ, INT);
+CREATE FUNCTION cerefox_list_audit_entries(
+    p_document_id   UUID        DEFAULT NULL,
+    p_author        TEXT        DEFAULT NULL,
+    p_operation     TEXT        DEFAULT NULL,
+    p_since         TIMESTAMPTZ DEFAULT NULL,
+    p_until         TIMESTAMPTZ DEFAULT NULL,
+    p_limit         INT         DEFAULT 50
+)
+RETURNS TABLE (
+    id              UUID,
+    document_id     UUID,
+    doc_title       TEXT,
+    version_id      UUID,
+    operation       TEXT,
+    author          TEXT,
+    author_type     TEXT,
+    size_before     INT,
+    size_after      INT,
+    description     TEXT,
+    created_at      TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT
+        a.id,
+        a.document_id,
+        d.title         AS doc_title,
+        a.version_id,
+        a.operation,
+        a.author,
+        a.author_type,
+        a.size_before,
+        a.size_after,
+        a.description,
+        a.created_at
+    FROM cerefox_audit_log a
+    LEFT JOIN cerefox_documents d ON d.id = a.document_id
+    WHERE (p_document_id IS NULL OR a.document_id = p_document_id)
+      AND (p_author IS NULL      OR a.author = p_author)
+      AND (p_operation IS NULL   OR a.operation = p_operation)
+      AND (p_since IS NULL       OR a.created_at >= p_since)
+      AND (p_until IS NULL       OR a.created_at <= p_until)
+    ORDER BY a.created_at DESC
+    LIMIT p_limit;
+$$;
+
+-- ── Metadata key discovery RPC ────────────────────────────────────────────────
 -- Derives metadata keys from actual document data (metadata JSONB column).
--- No registry table needed — always accurate, zero maintenance.
+-- No registry table needed; always accurate, zero maintenance.
 -- Used by CLI, MCP tools, web UI autocomplete.
 
 DROP FUNCTION IF EXISTS cerefox_list_metadata_keys();

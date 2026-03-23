@@ -175,17 +175,19 @@ Every Cerefox operation is implemented **once** in a Postgres RPC (SECURITY DEFI
 Agent / MCP client
       │
       ▼  (anon key, JWT validated by Supabase gateway)
-cerefox-mcp  ──internal fetch──▶  cerefox-search        ──supabase.rpc──▶  cerefox_hybrid_search
-             ──internal fetch──▶  cerefox-ingest         ──supabase.rpc──▶  cerefox_ingest_document
-             ──internal fetch──▶  cerefox-metadata       ──supabase.rpc──▶  cerefox_list_metadata_keys
-             ──internal fetch──▶  cerefox-get-document   ──supabase.rpc──▶  cerefox_get_document
-             ──internal fetch──▶  cerefox-list-versions  ──supabase.rpc──▶  cerefox_list_document_versions
+cerefox-mcp  ──internal fetch──▶  cerefox-search         ──supabase.rpc──▶  cerefox_hybrid_search
+             ──internal fetch──▶  cerefox-ingest          ──supabase.rpc──▶  cerefox_ingest_document
+             ──internal fetch──▶  cerefox-metadata        ──supabase.rpc──▶  cerefox_list_metadata_keys
+             ──internal fetch──▶  cerefox-get-document    ──supabase.rpc──▶  cerefox_get_document
+             ──internal fetch──▶  cerefox-list-versions   ──supabase.rpc──▶  cerefox_list_document_versions
+             ──internal fetch──▶  cerefox-get-audit-log   ──supabase.rpc──▶  cerefox_list_audit_entries
 
 GPT Actions (Custom GPT) ──────▶  cerefox-search        (same Edge Functions, direct HTTP)
                          ──────▶  cerefox-ingest
                          ──────▶  cerefox-metadata
                          ──────▶  cerefox-get-document
                          ──────▶  cerefox-list-versions
+                         ──────▶  cerefox-get-audit-log
 
 Python CLI / Web UI ───────────▶  cerefox.db.client     ──psycopg2 / REST──▶  same RPCs
 ```
@@ -219,7 +221,8 @@ Business logic lives **only in Postgres RPCs**. If you need to add logic to a to
 | `cerefox-metadata` | List metadata keys with doc counts + example values | cerefox-mcp, GPT Actions |
 | `cerefox-get-document` | Retrieve full doc content; supports archived versions | cerefox-mcp, GPT Actions |
 | `cerefox-list-versions` | List archived version history for a document | cerefox-mcp, GPT Actions |
-| `cerefox-mcp` | MCP Streamable HTTP adapter; delegates all 5 tools above | Claude Code, Cursor, Claude Desktop (via supergateway) |
+| `cerefox-get-audit-log` | Query audit log entries with filters (document, author, operation, time range) | cerefox-mcp, GPT Actions |
+| `cerefox-mcp` | MCP Streamable HTTP adapter; delegates all 7 tools above | Claude Code, Cursor, Claude Desktop (via supergateway) |
 
 ### Edge Function Model Config
 
