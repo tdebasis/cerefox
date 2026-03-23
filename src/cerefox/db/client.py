@@ -201,7 +201,7 @@ class CerefoxClient:
             query = (
                 self.client.table("cerefox_documents")
                 .select(
-                    "id, title, source, source_path, content_hash, metadata, chunk_count, total_chars, created_at, updated_at"
+                    "id, title, source, source_path, content_hash, metadata, chunk_count, total_chars, review_status, created_at, updated_at"
                 )
                 .order("updated_at", desc=True)
             )
