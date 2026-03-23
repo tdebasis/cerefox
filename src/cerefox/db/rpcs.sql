@@ -882,6 +882,68 @@ AS $$
     RETURNING id AS audit_id, cerefox_audit_log.created_at;
 $$;
 
+-- ── cerefox_list_audit_entries ────────────────────────────────────────────────
+-- Returns audit log entries with optional filters. Joins cerefox_documents to
+-- include doc_title. Used by the web UI, Edge Function, and MCP tool.
+--
+-- Parameters:
+--   p_document_id : Filter by document (NULL = all)
+--   p_author      : Filter by author (NULL = all)
+--   p_operation   : Filter by operation type (NULL = all)
+--   p_since       : Return entries created at or after this timestamp (NULL = no lower bound)
+--   p_until       : Return entries created at or before this timestamp (NULL = no upper bound)
+--   p_limit       : Max entries to return (default: 50)
+
+DROP FUNCTION IF EXISTS cerefox_list_audit_entries(UUID, TEXT, TEXT, TIMESTAMPTZ, TIMESTAMPTZ, INT);
+CREATE FUNCTION cerefox_list_audit_entries(
+    p_document_id   UUID        DEFAULT NULL,
+    p_author        TEXT        DEFAULT NULL,
+    p_operation     TEXT        DEFAULT NULL,
+    p_since         TIMESTAMPTZ DEFAULT NULL,
+    p_until         TIMESTAMPTZ DEFAULT NULL,
+    p_limit         INT         DEFAULT 50
+)
+RETURNS TABLE (
+    id              UUID,
+    document_id     UUID,
+    doc_title       TEXT,
+    version_id      UUID,
+    operation       TEXT,
+    author          TEXT,
+    author_type     TEXT,
+    size_before     INT,
+    size_after      INT,
+    description     TEXT,
+    created_at      TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT
+        a.id,
+        a.document_id,
+        d.title         AS doc_title,
+        a.version_id,
+        a.operation,
+        a.author,
+        a.author_type,
+        a.size_before,
+        a.size_after,
+        a.description,
+        a.created_at
+    FROM cerefox_audit_log a
+    LEFT JOIN cerefox_documents d ON d.id = a.document_id
+    WHERE (p_document_id IS NULL OR a.document_id = p_document_id)
+      AND (p_author IS NULL      OR a.author = p_author)
+      AND (p_operation IS NULL   OR a.operation = p_operation)
+      AND (p_since IS NULL       OR a.created_at >= p_since)
+      AND (p_until IS NULL       OR a.created_at <= p_until)
+    ORDER BY a.created_at DESC
+    LIMIT p_limit;
+$$;
+
 -- ── Metadata key discovery RPC ────────────────────────────────────────────────
 -- Derives metadata keys from actual document data (metadata JSONB column).
 -- No registry table needed; always accurate, zero maintenance.

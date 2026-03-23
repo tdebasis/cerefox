@@ -107,32 +107,39 @@ class TestCreateAuditEntry:
 
 
 class TestListAuditEntries:
-    def test_queries_with_no_filters(self, cerefox_client, mock_supabase):
+    def test_calls_rpc_with_no_filters(self, cerefox_client, mock_supabase):
         cerefox_client.list_audit_entries()
-        mock_supabase.table.assert_called_with("cerefox_audit_log")
-
-    def test_filters_by_document_id(self, cerefox_client, mock_supabase):
-        cerefox_client.list_audit_entries(document_id="doc-001")
-        mock_supabase.table.return_value.select.return_value.order.return_value.limit.return_value.eq.assert_called_with(
-            "document_id", "doc-001"
+        mock_supabase.rpc.assert_called_with(
+            "cerefox_list_audit_entries",
+            {
+                "p_document_id": None,
+                "p_author": None,
+                "p_operation": None,
+                "p_since": None,
+                "p_until": None,
+                "p_limit": 50,
+            },
         )
 
-    def test_filters_by_author(self, cerefox_client, mock_supabase):
+    def test_passes_document_id_filter(self, cerefox_client, mock_supabase):
+        cerefox_client.list_audit_entries(document_id="doc-001")
+        call_args = mock_supabase.rpc.call_args
+        assert call_args[0][1]["p_document_id"] == "doc-001"
+
+    def test_passes_author_filter(self, cerefox_client, mock_supabase):
         cerefox_client.list_audit_entries(author="fotis")
-        # The chain is: select -> order -> limit -> eq(author)
-        # Exact call depends on chaining order; just verify eq is called
-        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
-        assert any("'author'" in c for c in calls)
+        call_args = mock_supabase.rpc.call_args
+        assert call_args[0][1]["p_author"] == "fotis"
 
-    def test_filters_by_since_timestamp(self, cerefox_client, mock_supabase):
+    def test_passes_since_filter(self, cerefox_client, mock_supabase):
         cerefox_client.list_audit_entries(since="2026-03-22T00:00:00Z")
-        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
-        assert any("'created_at'" in c for c in calls)
+        call_args = mock_supabase.rpc.call_args
+        assert call_args[0][1]["p_since"] == "2026-03-22T00:00:00Z"
 
-    def test_respects_limit(self, cerefox_client, mock_supabase):
+    def test_passes_custom_limit(self, cerefox_client, mock_supabase):
         cerefox_client.list_audit_entries(limit=10)
-        calls = [str(c) for c in mock_supabase.table.return_value.method_calls]
-        assert any("10" in c for c in calls)
+        call_args = mock_supabase.rpc.call_args
+        assert call_args[0][1]["p_limit"] == 10
 
 
 # ── Review status ────────────────────────────────────────────────────────────

@@ -147,7 +147,7 @@ export function AuditLogPage() {
                       }}
                       href={`/app/document/${e.document_id}`}
                     >
-                      {e.document_id.slice(0, 8)}...
+                      {e.doc_title || e.document_id.slice(0, 8) + "..."}
                     </Anchor>
                   ) : (
                     <Text size="xs" c="dimmed">

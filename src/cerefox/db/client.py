@@ -820,23 +820,17 @@ class CerefoxClient:
             until: ISO timestamp -- return entries created before this time.
             limit: Max entries to return (default 50).
         """
-        q = (
-            self.client.table("cerefox_audit_log")
-            .select("*")
-            .order("created_at", desc=True)
-            .limit(limit)
+        return self.rpc(
+            "cerefox_list_audit_entries",
+            {
+                "p_document_id": document_id,
+                "p_author": author,
+                "p_operation": operation,
+                "p_since": since,
+                "p_until": until,
+                "p_limit": limit,
+            },
         )
-        if document_id:
-            q = q.eq("document_id", document_id)
-        if author:
-            q = q.eq("author", author)
-        if operation:
-            q = q.eq("operation", operation)
-        if since:
-            q = q.gte("created_at", since)
-        if until:
-            q = q.lte("created_at", until)
-        return q.execute().data or []
 
     # ── Review status ────────────────────────────────────────────────────────
 

@@ -153,6 +153,37 @@ const TOOLS = [
       },
     },
   },
+  {
+    name: "cerefox_get_audit_log",
+    description:
+      "Retrieve audit log entries showing who changed what and when. Supports filtering by document, author, operation type, and time range. Returns entries with document titles, author attribution, size changes, and descriptions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        document_id: {
+          type: "string",
+          description: "Filter by document UUID (optional)",
+        },
+        author: {
+          type: "string",
+          description: "Filter by author name (optional)",
+        },
+        operation: {
+          type: "string",
+          description:
+            "Filter by operation type: create, update-content, update-metadata, delete, status-change, archive, unarchive (optional)",
+        },
+        since: {
+          type: "string",
+          description: "ISO timestamp lower bound for temporal queries (optional)",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of entries to return (default: 50, max: 200)",
+        },
+      },
+    },
+  },
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -411,6 +442,54 @@ async function handleToolCall(
     return `Archived versions (newest first):\n\n${lines.join("\n")}`;
   }
 
+  if (name === "cerefox_get_audit_log") {
+    const resp = await fetch(`${supabaseUrl}/functions/v1/cerefox-get-audit-log`, {
+      method: "POST",
+      headers: internalHeaders,
+      body: JSON.stringify({
+        document_id: args.document_id ?? null,
+        author: args.author ?? null,
+        operation: args.operation ?? null,
+        since: args.since ?? null,
+        limit: args.limit ?? 50,
+      }),
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      const errMsg = (data as { error?: string }).error ?? `HTTP ${resp.status}`;
+      throw new Error(`cerefox-get-audit-log error: ${errMsg}`);
+    }
+
+    const entries = data as Array<{
+      id: string;
+      document_id: string | null;
+      doc_title: string | null;
+      operation: string;
+      author: string;
+      author_type: string;
+      size_before: number | null;
+      size_after: number | null;
+      description: string;
+      created_at: string;
+    }>;
+
+    if (!entries?.length) return "No audit log entries found.";
+
+    const lines = entries.map((e) => {
+      const docLabel = e.doc_title ?? (e.document_id ? e.document_id.slice(0, 8) + "..." : "(deleted)");
+      const sizeInfo = e.size_before != null && e.size_after != null
+        ? ` | ${e.size_before} -> ${e.size_after} chars`
+        : e.size_after != null
+          ? ` | ${e.size_after} chars`
+          : "";
+      return `${e.created_at.slice(0, 19)} | ${e.operation} | ${e.author} (${e.author_type}) | ${docLabel}${sizeInfo} | ${e.description}`;
+    });
+
+    return `Audit log (${entries.length} entries, newest first):\n\n${lines.join("\n")}`;
+  }
+
   throw new Error(`Unknown tool: ${name}`);
 }
 
@@ -432,6 +511,7 @@ async function handleToolsCall(
     "cerefox_list_metadata_keys",
     "cerefox_get_document",
     "cerefox_list_versions",
+    "cerefox_get_audit_log",
   ];
   if (!knownTools.includes(toolName)) {
     return errorResponse(id, -32602, `Unknown tool: ${toolName}`);

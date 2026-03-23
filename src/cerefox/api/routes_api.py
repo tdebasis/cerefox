@@ -848,6 +848,7 @@ def api_delete_project(
 class AuditEntryResponse(BaseModel):
     id: str
     document_id: str | None = None
+    doc_title: str | None = None
     version_id: str | None = None
     operation: str
     author: str
@@ -885,6 +886,7 @@ def api_list_audit_entries(
         AuditEntryResponse(
             id=e["id"],
             document_id=e.get("document_id"),
+            doc_title=e.get("doc_title"),
             version_id=e.get("version_id"),
             operation=e["operation"],
             author=e.get("author", "unknown"),

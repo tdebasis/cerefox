@@ -95,6 +95,7 @@ export interface DocumentVersion {
 export interface AuditEntry {
   id: string;
   document_id: string | null;
+  doc_title: string | null;
   version_id: string | null;
   operation: string;
   author: string;
