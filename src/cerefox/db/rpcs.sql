@@ -846,6 +846,58 @@ AS $$
     ORDER BY created_at DESC;
 $$;
 
+-- ── cerefox_delete_document ──────────────────────────────────────────────────
+-- Deletes a document and creates an audit entry recording the deletion.
+-- The audit entry captures the document title and size before deletion.
+-- After deletion, the audit entry's document_id becomes NULL (ON DELETE SET NULL)
+-- but the description preserves the document identity.
+--
+-- Parameters:
+--   p_document_id  : UUID of the document to delete
+--   p_author       : who performed the deletion
+--   p_author_type  : 'user' or 'agent'
+
+DROP FUNCTION IF EXISTS cerefox_delete_document(UUID, TEXT, TEXT);
+CREATE FUNCTION cerefox_delete_document(
+    p_document_id   UUID,
+    p_author        TEXT    DEFAULT 'unknown',
+    p_author_type   TEXT    DEFAULT 'user'
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_title      TEXT;
+    v_total_chars INT;
+BEGIN
+    -- Capture document info before deletion
+    SELECT title, total_chars INTO v_title, v_total_chars
+    FROM cerefox_documents WHERE id = p_document_id;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Document % not found', p_document_id;
+    END IF;
+
+    -- Create audit entry BEFORE deletion (so document_id FK is still valid)
+    PERFORM cerefox_create_audit_entry(
+        p_document_id := p_document_id,
+        p_operation := 'delete',
+        p_author := p_author,
+        p_author_type := p_author_type,
+        p_size_before := v_total_chars,
+        p_size_after := 0,
+        p_description := 'Deleted document: ' || COALESCE(v_title, '(untitled)') ||
+                         ' (' || COALESCE(v_total_chars, 0) || ' chars)'
+    );
+
+    -- Delete document (cascades to chunks, versions, project associations)
+    DELETE FROM cerefox_documents WHERE id = p_document_id;
+END;
+$$;
+
+
 -- ── cerefox_ingest_document ──────────────────────────────────────────────────
 -- Single RPC for ingesting a document (create or update). Handles:
 --   - Create: insert document row, insert chunks, set review_status, create audit entry

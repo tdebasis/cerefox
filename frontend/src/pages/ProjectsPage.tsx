@@ -66,6 +66,7 @@ export function ProjectsPage() {
     mutationFn: (id: string) => deleteProject(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       showSuccess("Project deleted");
       setConfirmDeleteId(null);
     },

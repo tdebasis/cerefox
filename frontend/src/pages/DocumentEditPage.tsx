@@ -77,6 +77,7 @@ export function DocumentEditPage() {
     onSuccess: (result) => {
       if (result.success) {
         queryClient.invalidateQueries({ queryKey: ["document", id] });
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] });
         showSuccess("Document saved", result.reindexed ? "Content re-indexed" : "Metadata updated");
         navigate(`/document/${id}`);
       } else if (result.error) {

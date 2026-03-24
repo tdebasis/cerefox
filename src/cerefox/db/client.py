@@ -151,13 +151,15 @@ class CerefoxClient:
             logger.error("get_document_by_id failed: %s", exc)
             raise RuntimeError(f"get_document_by_id failed: {exc}") from exc
 
-    def delete_document(self, document_id: str) -> None:
-        """Delete a document and cascade-delete its chunks."""
-        try:
-            self.client.table("cerefox_documents").delete().eq("id", document_id).execute()
-        except Exception as exc:
-            logger.error("delete_document failed: %s", exc)
-            raise RuntimeError(f"delete_document failed: {exc}") from exc
+    def delete_document(
+        self, document_id: str, author: str = "unknown", author_type: str = "user"
+    ) -> None:
+        """Delete a document via RPC (creates audit entry, then cascade-deletes)."""
+        self.rpc("cerefox_delete_document", {
+            "p_document_id": document_id,
+            "p_author": author,
+            "p_author_type": author_type,
+        })
 
     def delete_chunks_for_document(self, document_id: str) -> None:
         """Delete all current chunks for a document without deleting the document itself.

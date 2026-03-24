@@ -22,6 +22,7 @@ _EXPECTED_TABLES = [
     "cerefox_projects",
     "cerefox_documents",
     "cerefox_document_versions",
+    "cerefox_audit_log",
     "cerefox_document_projects",
     "cerefox_chunks",
     "cerefox_migrations",
@@ -40,6 +41,10 @@ _EXPECTED_FUNCTIONS = [
     "cerefox_snapshot_version",
     "cerefox_get_document",
     "cerefox_list_document_versions",
+    "cerefox_create_audit_entry",
+    "cerefox_list_audit_entries",
+    "cerefox_ingest_document",
+    "cerefox_delete_document",
 ]
 
 _EXPECTED_EXTENSIONS = ["uuid-ossp", "vector"]

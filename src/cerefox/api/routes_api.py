@@ -616,9 +616,9 @@ def api_delete_document(
     document_id: str,
     client: CerefoxClient = Depends(get_client),
 ) -> dict[str, bool]:
-    """Delete a document."""
+    """Delete a document (creates audit entry via RPC before deletion)."""
     try:
-        client.delete_document(document_id)
+        client.delete_document(document_id, author="web-ui", author_type="user")
         return {"success": True}
     except Exception as exc:
         logger.error("delete_document %s failed: %s", document_id, exc)

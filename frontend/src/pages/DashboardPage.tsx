@@ -20,7 +20,7 @@ import { useNavigate } from "react-router-dom";
 
 import { fetchDashboard } from "../api/dashboard";
 import { useProjects } from "../hooks/useProjects";
-import { formatDate } from "../utils/dates";
+import { formatDateTime } from "../utils/dates";
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -132,11 +132,13 @@ export function DashboardPage() {
                     >
                       {doc.title || "Untitled"}
                     </Anchor>
-                    {doc.project_ids.map((pid) => (
-                      <Badge key={pid} variant="light" size="xs">
-                        {projectMap.get(pid) || pid.slice(0, 8)}
-                      </Badge>
-                    ))}
+                    {doc.project_ids
+                      .filter((pid) => projectMap.has(pid))
+                      .map((pid) => (
+                        <Badge key={pid} variant="light" size="xs">
+                          {projectMap.get(pid)}
+                        </Badge>
+                      ))}
                     <Badge
                       variant="light"
                       size="xs"
@@ -154,7 +156,7 @@ export function DashboardPage() {
                 </Table.Td>
                 <Table.Td>
                   <Text size="sm" c="dimmed">
-                    {formatDate(doc.updated_at)}
+                    {formatDateTime(doc.updated_at)}
                   </Text>
                 </Table.Td>
               </Table.Tr>

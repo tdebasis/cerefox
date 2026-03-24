@@ -49,6 +49,11 @@ These are "input adapters" -- Cerefox is the backend, these tools are the author
 - [ ] Mobile-responsive layout improvements
 - [ ] Side-by-side diff view (requires table-based layout with paired rows for alignment)
 
+### Audit & Governance
+- [ ] Audit log entries for project operations (create, edit, delete) -- currently only document operations are tracked
+- [ ] Audit log FTS query integration -- FTS index exists on description column but no dedicated search endpoint
+- [ ] Automated knowledge processing via external LLM (anomaly detection, consistency checking, staleness assessment) -- see vision doc
+
 ### Infrastructure
 - [ ] Row-Level Security (RLS) policies for multi-user future
 - [ ] Rate limiting on API endpoints

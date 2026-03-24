@@ -26,7 +26,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { useState } from "react";
 
-import { setReviewStatus, setVersionArchived } from "../api/audit";
+import { fetchAuditLog, setReviewStatus, setVersionArchived } from "../api/audit";
 import { fetchDocument, fetchChunks, deleteDocument, fetchDocumentVersion, getDownloadUrl } from "../api/documents";
 import { DiffViewer } from "../components/DiffViewer";
 import { MarkdownViewer } from "../components/MarkdownViewer";
@@ -50,6 +50,14 @@ export function DocumentPage() {
     queryKey: ["document-chunks", id],
     queryFn: () => fetchChunks(id!),
     enabled: !!id,
+  });
+
+  const [auditOpened, setAuditOpened] = useState(false);
+  const auditEnabled = !!id && auditOpened;
+  const { data: auditEntries, isLoading: auditLoading } = useQuery({
+    queryKey: ["document-audit", id],
+    queryFn: () => fetchAuditLog({ document_id: id!, limit: 50 }),
+    enabled: auditEnabled,
   });
 
   const { data: projects } = useProjects();
@@ -134,11 +142,13 @@ export function DocumentPage() {
         <div>
           <Title order={2}>{doc.doc_title || "Untitled"}</Title>
           <Group gap="xs" mt="xs">
-            {doc.project_ids.map((pid) => (
-              <Badge key={pid} variant="light" size="sm">
-                {projectMap.get(pid) || pid.slice(0, 8)}
-              </Badge>
-            ))}
+            {doc.project_ids
+              .filter((pid) => projectMap.has(pid))
+              .map((pid) => (
+                <Badge key={pid} variant="light" size="sm">
+                  {projectMap.get(pid)}
+                </Badge>
+              ))}
             <Text size="sm" c="dimmed">
               {doc.chunk_count} chunks | {doc.total_chars.toLocaleString()} chars
             </Text>
@@ -245,6 +255,87 @@ export function DocumentPage() {
           </Accordion>
         </>
       )}
+
+      <Accordion variant="contained" mb="md" onChange={(v) => {
+        if (v === "audit" || (Array.isArray(v) && v.includes("audit"))) {
+          setAuditOpened(true);
+        }
+      }}>
+        <Accordion.Item value="audit">
+          <Accordion.Control>
+            <Text size="sm" fw={500}>
+              Audit Trail{auditEntries ? ` (${auditEntries.length} entries)` : ""}
+            </Text>
+          </Accordion.Control>
+          <Accordion.Panel>
+            {auditLoading ? (
+              <Loader size="sm" />
+            ) : !auditEntries?.length ? (
+              <Text size="sm" c="dimmed">No audit entries for this document.</Text>
+            ) : (
+              <Table striped>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Date</Table.Th>
+                    <Table.Th>Operation</Table.Th>
+                    <Table.Th>Author</Table.Th>
+                    <Table.Th>Size</Table.Th>
+                    <Table.Th>Description</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {auditEntries.map((e) => {
+                    const opColor = (() => {
+                      switch (e.operation) {
+                        case "create": return "green";
+                        case "update-content": return "blue";
+                        case "update-metadata": return "cyan";
+                        case "delete": return "red";
+                        case "status-change": return "yellow";
+                        case "archive": return "violet";
+                        case "unarchive": return "orange";
+                        default: return "gray";
+                      }
+                    })();
+                    const sizeText = e.size_before != null && e.size_after != null
+                      ? `${e.size_before.toLocaleString()} -> ${e.size_after.toLocaleString()}`
+                      : e.size_after != null
+                        ? e.size_after.toLocaleString()
+                        : "";
+                    return (
+                      <Table.Tr key={e.id}>
+                        <Table.Td>
+                          <Text size="xs">{formatDateTime(e.created_at)}</Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge variant="light" size="sm" color={opColor}>
+                            {e.operation}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Group gap={4}>
+                            <Text size="sm">{e.author}</Text>
+                            <Badge variant="dot" size="xs"
+                              color={e.author_type === "agent" ? "violet" : "blue"}>
+                              {e.author_type}
+                            </Badge>
+                          </Group>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="xs" c="dimmed">{sizeText}</Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="xs" lineClamp={2}>{e.description}</Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    );
+                  })}
+                </Table.Tbody>
+              </Table>
+            )}
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
 
       {doc.versions.length > 0 && (
         <Accordion variant="contained" mb="md">
@@ -425,6 +516,7 @@ export function DocumentPage() {
             )}
           </Accordion.Panel>
         </Accordion.Item>
+
       </Accordion>
       <Modal
         opened={diffVersionId !== null && diffVersionContent !== null}

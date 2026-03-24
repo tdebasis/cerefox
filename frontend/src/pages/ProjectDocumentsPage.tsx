@@ -87,10 +87,10 @@ export function ProjectDocumentsPage() {
                         {doc.title || "Untitled"}
                       </Anchor>
                       {doc.project_ids
-                        .filter((pid) => pid !== id)
+                        .filter((pid) => pid !== id && projectMap.has(pid))
                         .map((pid) => (
                           <Badge key={pid} variant="light" size="xs">
-                            {projectMap.get(pid) || pid.slice(0, 8)}
+                            {projectMap.get(pid)}
                           </Badge>
                         ))}
                       <Badge
