@@ -7,6 +7,35 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) — all `
 
 ---
 
+## [v0.1.9] -- 2026-03-23
+
+Single implementation principle consolidation, audit trail completion, and UI refinements.
+
+### Added
+- **`cerefox_ingest_document` RPC**: single atomic transaction for all ingestion writes (insert/update document, insert chunks, snapshot version, set review_status, create audit entry). Both Python pipeline and Edge Function now call this RPC instead of doing direct table inserts.
+- **`cerefox_delete_document` RPC**: creates audit entry (preserving document title and size) before cascade-deleting the document.
+- **`cerefox_get_audit_log` tool** on the local Python MCP server (was missing; already existed on remote Edge Function MCP).
+- **Audit Trail section** on Document Detail page: lazy-loaded accordion showing all audit entries for the document with color-coded operation badges, author attribution, and size deltas.
+- **`author` parameter** on `cerefox_ingest` MCP tool: agents can identify themselves (e.g., "Claude Code", "Cursor") instead of the default "mcp-agent".
+- **Review status filter** on Search page (docs mode): filter by All / Approved / Pending Review.
+- **Upgrading guide** (`docs/guides/upgrading.md`): idempotent migration checklist for users upgrading from any previous version.
+- `CONTRIBUTING.md` moved to repo root (GitHub community standards compliance).
+- `SECURITY.md` for private vulnerability reporting.
+- GPT Actions OpenAPI spec bumped to v1.5.0 (new audit log endpoint, author parameter on ingest).
+
+### Changed
+- **Single implementation principle enforced**: ingestion write path consolidated into `cerefox_ingest_document` RPC. CLAUDE.md updated with clear guidance that all new write logic goes in RPCs, not callers.
+- **Review status** correctly set on new agent-created documents (`pending_review`) -- was defaulting to `approved` due to missing logic in the create path.
+- Dashboard "Updated" column shows date and time (was date only).
+- Quickstart guide updated for React SPA (Node.js prerequisite, frontend build step, correct URLs).
+
+### Fixed
+- **Double JSON encoding** in `ingest_document_rpc` parameters causing "cannot get array length of a scalar" error on local MCP path.
+- **Stale project badges** showing raw UUIDs after project deletion -- dashboard cache now invalidated on project delete and document edit; unknown project IDs filtered from badge display.
+- **Dark mode inline code** contrast -- `light-dark()` CSS function for code/pre/th backgrounds.
+
+---
+
 ## [v0.1.8] -- 2026-03-23
 
 Trust and governance layer: audit log, review status, version archival, and version diff viewer.
@@ -220,6 +249,7 @@ First complete release. All core features working end-to-end.
 
 Initial project scaffolding, documentation structure, and phased implementation of core modules (database client, chunking, embeddings, ingestion, retrieval, CLI, web UI, backup). Not tagged.
 
+[v0.1.9]: https://github.com/fstamatelopoulos/cerefox/compare/v0.1.8...v0.1.9
 [v0.1.8]: https://github.com/fstamatelopoulos/cerefox/compare/v0.1.7...v0.1.8
 [v0.1.7]: https://github.com/fstamatelopoulos/cerefox/compare/v0.1.6...v0.1.7
 [v0.1.6]: https://github.com/fstamatelopoulos/cerefox/compare/v0.1.5...v0.1.6
