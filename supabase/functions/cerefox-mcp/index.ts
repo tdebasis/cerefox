@@ -291,6 +291,7 @@ async function handleToolCall(
     }
 
     const rows = result.results as Array<{
+      document_id?: string;
       doc_title?: string;
       full_content?: string;
       best_score?: number;
@@ -301,11 +302,12 @@ async function handleToolCall(
 
     const parts: string[] = rows.map((row) => {
       const title = row.doc_title ?? "Untitled";
+      const docId = row.document_id ? ` [id: ${row.document_id}]` : "";
       const score = row.best_score != null ? ` (score: ${row.best_score.toFixed(3)})` : "";
       const partial = row.is_partial
-        ? ` — partial (${row.chunk_count} of ${(row.total_chars ?? 0).toLocaleString()} chars)`
+        ? ` -- partial (${row.chunk_count} of ${(row.total_chars ?? 0).toLocaleString()} chars)`
         : "";
-      return `## ${title}${score}${partial}\n\n${row.full_content ?? ""}`;
+      return `## ${title}${docId}${score}${partial}\n\n${row.full_content ?? ""}`;
     });
 
     let output = parts.join("\n\n---\n\n");
