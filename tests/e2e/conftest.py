@@ -127,14 +127,52 @@ class EdgeFunctionClient:
         return resp.json()
 
 
-@pytest.fixture(scope="session")
-def e2e_edge(e2e_settings: Settings) -> EdgeFunctionClient | None:
-    """An Edge Function client using the anon key for JWT auth.
+class McpEdgeFunctionClient:
+    """Invokes MCP tools on the consolidated cerefox edge function via JSON-RPC 2.0.
 
-    Returns None (and tests skip) if no valid JWT key is available.
-    Reads CEREFOX_SUPABASE_ANON_KEY from .env (via dotenv) or os env,
-    falling back to CEREFOX_SUPABASE_KEY if it looks like a JWT.
+    Sends standard MCP tools/call requests to /functions/v1/cerefox and returns
+    the result payload. Used for testing the consolidated edge function that
+    handles all tool logic inline (no internal fetch delegation).
     """
+
+    def __init__(self, base_url: str, anon_key: str) -> None:
+        self._http = httpx.Client(
+            base_url=f"{base_url}/functions/v1",
+            headers={
+                "Authorization": f"Bearer {anon_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=30.0,
+        )
+        self._id_counter = 0
+
+    def call_tool(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Send a tools/call JSON-RPC request, return the MCP result object.
+
+        Returns the 'result' field from the JSON-RPC response, which contains
+        'content': [{'type': 'text', 'text': '...'}].
+        """
+        self._id_counter += 1
+        resp = self._http.post("/cerefox", json={
+            "jsonrpc": "2.0",
+            "id": self._id_counter,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments or {}},
+        })
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise RuntimeError(f"MCP error: {data['error']}")
+        return data["result"]
+
+    def get_text(self, tool_name: str, arguments: dict[str, Any] | None = None) -> str:
+        """Call a tool and return the text content from the first content block."""
+        result = self.call_tool(tool_name, arguments)
+        return result["content"][0]["text"]
+
+
+def _resolve_anon_key(e2e_settings: Settings) -> str | None:
+    """Resolve the Supabase anon key from env vars or .env file."""
     from dotenv import dotenv_values
 
     dotenv = dotenv_values(".env")
@@ -145,9 +183,33 @@ def e2e_edge(e2e_settings: Settings) -> EdgeFunctionClient | None:
         main_key = e2e_settings.supabase_key
         if main_key.startswith("eyJ"):
             anon_key = main_key
+    return anon_key or None
+
+
+@pytest.fixture(scope="session")
+def e2e_edge(e2e_settings: Settings) -> EdgeFunctionClient | None:
+    """An Edge Function client using the anon key for JWT auth.
+
+    Returns None (and tests skip) if no valid JWT key is available.
+    Reads CEREFOX_SUPABASE_ANON_KEY from .env (via dotenv) or os env,
+    falling back to CEREFOX_SUPABASE_KEY if it looks like a JWT.
+    """
+    anon_key = _resolve_anon_key(e2e_settings)
     if not anon_key:
         return None
     return EdgeFunctionClient(e2e_settings.supabase_url, anon_key)
+
+
+@pytest.fixture(scope="session")
+def e2e_mcp_edge(e2e_settings: Settings) -> McpEdgeFunctionClient | None:
+    """An MCP Edge Function client for the consolidated cerefox function.
+
+    Uses the same anon key resolution as e2e_edge. Returns None if no key.
+    """
+    anon_key = _resolve_anon_key(e2e_settings)
+    if not anon_key:
+        return None
+    return McpEdgeFunctionClient(e2e_settings.supabase_url, anon_key)
 
 
 class E2ECleanup:
