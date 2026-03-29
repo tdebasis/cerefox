@@ -7,6 +7,27 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) — all `
 
 ---
 
+## [v0.1.11.1] -- 2026-03-29
+
+Soft delete with trash bin, restore, and purge.
+
+### Added
+- **Soft delete**: "Delete" now sets `deleted_at` instead of CASCADE DELETE. Documents remain in the database (with all chunks and versions) but are excluded from search.
+- **Trash page** (`/app/trash`): lists soft-deleted documents with Restore and Purge buttons. Purge has two-step confirmation.
+- **Restore**: `cerefox_restore_document` RPC clears `deleted_at`. Document returns to search and dashboard immediately.
+- **Purge**: `cerefox_purge_document` RPC does permanent CASCADE DELETE. Only works on already soft-deleted docs.
+- **Document detail banner**: red "Deleted" indicator with Restore and Permanently Delete buttons when viewing a soft-deleted document.
+- **`'restore'` audit operation**: new operation type in the audit log CHECK constraint. Existing entries that incorrectly used `'unarchive'` for restore are auto-corrected by migration 0009.
+- Database migrations `0008_soft_delete.sql` and `0009_audit_log_restore_operation.sql`.
+
+### Changed
+- `cerefox_delete_document` RPC now soft-deletes (was CASCADE DELETE).
+- All search RPCs (hybrid, fts, semantic) filter `d.deleted_at IS NULL`.
+- `list_documents()` in Python client excludes soft-deleted docs.
+- REST API: new endpoints `POST /documents/{id}/restore`, `DELETE /documents/{id}/purge`, `GET /documents/trash`.
+
+---
+
 ## [v0.1.11] -- 2026-03-29
 
 Usage tracking, analytics dashboard, requestor attribution, and UX refinements (16C/16D).
