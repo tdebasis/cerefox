@@ -1459,10 +1459,9 @@ tracking via web UI or CLI. CSV export available. Data is ready for the analytic
 | 16D.15 | Update `docs/solution-design.md` -- add usage log table and analytics page to architecture | Done | |
 | 16D.16 | Update `CLAUDE.md` -- note new `cerefox_config` and `cerefox_usage_log` tables | Done | Architecture principles section updated |
 
-**Deliverable**: Users can visualize Cerefox usage patterns with 7 filterable charts
-(V1-V7 all included). Usage tracking is opt-in and controllable from the web UI.
-CSV export available for offline analysis. All visualizations implemented including
-reader/author word cloud (V6) and HEB reader-to-document access patterns (V7).
+**Deliverable**: Users can visualize Cerefox usage patterns with 8 filterable charts
+(V1-V8 all included). Usage tracking is opt-in and controllable from the web UI.
+CSV export available for offline analysis. All visualizations implemented.
 
 ---
 
