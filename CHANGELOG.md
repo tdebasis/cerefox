@@ -7,6 +7,35 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) — all `
 
 ---
 
+## [v0.1.10] -- 2026-03-28
+
+MCP consolidation (16A), metadata search, project name standardisation, and project discovery (16B). Resolves [#9](https://github.com/fstamatelopoulos/cerefox/issues/9). Inspired by [#10](https://github.com/fstamatelopoulos/cerefox/pull/10) (h/t @tdebasis).
+
+### Added
+- **`cerefox_metadata_search` RPC and MCP tool**: query documents by metadata key-value criteria without a text search term. JSONB containment filter with AND semantics, project/date filters, optional content inclusion with byte budget.
+- **`cerefox_list_projects` RPC and MCP tool**: agents can discover available projects by name before filtering in other tools.
+- **`cerefox-metadata-search` Edge Function**: new primitive Edge Function for GPT Actions and direct HTTP callers.
+- **`project_names TEXT[]`** added to all search/retrieve RPCs: all document results now include human-readable project names alongside UUIDs.
+- **Metadata Search web UI page** (`/app/metadata-search`): filter builder with key suggestions, project dropdown, date filters, include-content toggle, result cards with metadata and project name badges.
+- **Project name badges** on search result cards in the existing Search page.
+- **`cerefox metadata-search` CLI command** with `--filter`, `--project`, `--updated-since`, `--created-since`, `--limit`, `--include-content` options.
+- **`POST /api/v1/documents/metadata-search`** REST API endpoint for the web UI.
+- Database migration `0005_metadata_search.sql`.
+- 10 new MCP e2e tests, 4 new Edge Function e2e tests, 6 new API e2e tests, 4 new unit tests, 2 new Playwright UI tests.
+
+### Changed
+- **`cerefox-mcp` refactored to call RPCs directly** (16A): each tool handler calls Postgres RPCs via the service-role key instead of delegating to primitive Edge Functions via `fetch()`. Halves billable Supabase Edge Function invocations per MCP tool call. Multi-file structure: `shared.ts`, `embeddings.ts`, `tools/*.ts`.
+- **MCP tools: 6 -> 8** (added `cerefox_list_projects` and `cerefox_metadata_search`).
+- **Edge Functions: 7 -> 8** (added `cerefox-metadata-search`).
+- **Local MCP server reframed**: no longer labelled "legacy fallback". It is a local alternative with zero Edge Function usage (relevant for Supabase free-tier limits), lower latency, and offline support.
+- `connect-agents.md` updated with all 8 tools, corrected architecture description, Edge Function usage comparison.
+- `upgrading.md` updated with v0.1.10 breaking change notice.
+
+### Breaking (MCP remote path only)
+- **`project_id` removed from MCP tool inputs**: `cerefox_search`, `cerefox_ingest`, and `cerefox_metadata_search` now accept `project_name` (human-readable string) instead of `project_id` (UUID). Name-to-UUID resolution happens inside the tool handler. Agents passing `project_id` in MCP calls must switch to `project_name`. **Primitive Edge Functions are unchanged** -- they continue to accept `project_id UUID` for GPT Actions and direct HTTP callers.
+
+---
+
 ## [v0.1.9.1] -- 2026-03-23
 
 Bug fixes reported by user testing MCP integration with Claude Code.
