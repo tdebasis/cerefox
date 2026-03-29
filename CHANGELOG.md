@@ -7,6 +7,32 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html) — all `
 
 ---
 
+## [v0.1.11] -- 2026-03-29
+
+Usage tracking, analytics dashboard, requestor attribution, and UX refinements (16C/16D).
+
+### Added
+- **Usage tracking**: opt-in logging of all operations (reads and writes) across all access paths. `cerefox_usage_log` table with `requestor`, `access_path`, `operation`, `query_text`, and `result_count`. Controlled via `cerefox_config` table -- no redeploy needed to toggle.
+- **Analytics dashboard** at `/app/analytics`: 8 interactive visualizations (Nivo bar/pie charts, D3.js HEB charts, CSS word cloud). On-demand analysis with date range, project, and access path filters. Usage tracking toggle. CSV export.
+- **Requestor attribution**: optional `requestor` parameter on all MCP read tools and all primitive Edge Functions. MCP writes use the existing `author` parameter. Multi-agent analytics now show which agent accessed which documents through which operations.
+- **`cerefox-list-projects` Edge Function**: new primitive EF for GPT Actions and direct HTTP callers.
+- **CLI**: `cerefox config-get` and `cerefox config-set` commands for runtime config management.
+- **REST API**: 5 new endpoints (`/usage-log`, `/usage-log/export.csv`, `/usage-log/summary`, `/config/{key}` GET/PUT).
+- **Metadata Search UX**: expand/collapse result cards with full metadata, content viewer (Raw/Rendered toggle), and "View Document Details" link (new tab).
+- Database migrations `0006_usage_log.sql` and `0007_usage_log_requestor.sql`.
+- 2 new Playwright UI tests (analytics page).
+- GPT Actions OpenAPI schema v1.7.0 (9 endpoints, requestor param).
+
+### Changed
+- **Charting library**: replaced `@mantine/charts` (Recharts wrapper) with Nivo (`@nivo/bar`, `@nivo/pie`). Better dark mode, tooltips, and React 19 support.
+- **Word cloud**: replaced `react-d3-cloud` with CSS flex-wrap implementation (React 19 peer dep conflict).
+- **`reader` renamed to `requestor`** throughout: DB column, RPCs, Python client, TypeScript, frontend. Migration 0007 handles the column rename non-destructively.
+- **Usage log tracks writes**: ingest operations now logged alongside reads.
+- **Local MCP server**: no longer labelled "legacy fallback" -- described as local alternative with zero Edge Function usage.
+- Edge Functions: 8 -> 9 (added `cerefox-list-projects`).
+
+---
+
 ## [v0.1.10] -- 2026-03-28
 
 MCP consolidation (16A), metadata search, project name standardisation, and project discovery (16B). Resolves [#9](https://github.com/fstamatelopoulos/cerefox/issues/9). Inspired by [#10](https://github.com/fstamatelopoulos/cerefox/pull/10) (h/t @tdebasis).
