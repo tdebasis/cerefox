@@ -154,12 +154,45 @@ class CerefoxClient:
     def delete_document(
         self, document_id: str, author: str = "unknown", author_type: str = "user"
     ) -> None:
-        """Delete a document via RPC (creates audit entry, then cascade-deletes)."""
+        """Soft-delete a document (sets deleted_at, creates audit entry).
+
+        The document remains in the database but is excluded from search.
+        Use restore_document() to undo or purge_document() to permanently delete.
+        """
         self.rpc("cerefox_delete_document", {
             "p_document_id": document_id,
             "p_author": author,
             "p_author_type": author_type,
         })
+
+    def restore_document(
+        self, document_id: str, author: str = "unknown", author_type: str = "user"
+    ) -> None:
+        """Restore a soft-deleted document (clears deleted_at)."""
+        self.rpc("cerefox_restore_document", {
+            "p_document_id": document_id,
+            "p_author": author,
+            "p_author_type": author_type,
+        })
+
+    def purge_document(
+        self, document_id: str, author: str = "unknown", author_type: str = "user"
+    ) -> None:
+        """Permanently delete a soft-deleted document (CASCADE). Only works on soft-deleted docs."""
+        self.rpc("cerefox_purge_document", {
+            "p_document_id": document_id,
+            "p_author": author,
+            "p_author_type": author_type,
+        })
+
+    def list_deleted_documents(self, limit: int = 50) -> list[dict[str, Any]]:
+        """List soft-deleted documents (trash bin)."""
+        response = self.client.table("cerefox_documents").select(
+            "id, title, source, chunk_count, total_chars, review_status, deleted_at, updated_at"
+        ).not_.is_("deleted_at", "null").order(
+            "deleted_at", desc=True
+        ).limit(limit).execute()
+        return response.data or []
 
     def delete_chunks_for_document(self, document_id: str) -> None:
         """Delete all current chunks for a document without deleting the document itself.
@@ -205,6 +238,7 @@ class CerefoxClient:
                 .select(
                     "id, title, source, source_path, content_hash, metadata, chunk_count, total_chars, review_status, created_at, updated_at"
                 )
+                .is_("deleted_at", "null")
                 .order("updated_at", desc=True)
             )
             if project_id:
@@ -792,6 +826,135 @@ class CerefoxClient:
             "cerefox_context_expand",
             {"p_chunk_ids": chunk_ids, "p_window_size": window_size},
         )
+
+    def list_projects_rpc(self) -> list[dict[str, Any]]:
+        """Call cerefox_list_projects RPC. Returns all projects sorted by name."""
+        return self.rpc("cerefox_list_projects", {})
+
+    def metadata_search(
+        self,
+        metadata_filter: dict,
+        project_id: str | None = None,
+        updated_since: str | None = None,
+        created_since: str | None = None,
+        limit: int = 10,
+        include_content: bool = False,
+        max_bytes: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Call cerefox_metadata_search RPC.
+
+        Args:
+            metadata_filter: JSONB containment filter (AND semantics).
+            project_id: Optional project UUID.
+            updated_since: ISO-8601 timestamp lower bound for updated_at.
+            created_since: ISO-8601 timestamp lower bound for created_at.
+            limit: Max results (default 10).
+            include_content: Reconstruct full text for each doc.
+            max_bytes: Byte budget for accumulated content (None = no limit).
+        """
+        params: dict[str, Any] = {
+            "p_metadata_filter": metadata_filter,
+            "p_project_id": project_id,
+            "p_updated_since": updated_since,
+            "p_created_since": created_since,
+            "p_limit": limit,
+            "p_include_content": include_content,
+        }
+        if max_bytes is not None:
+            params["p_max_bytes"] = max_bytes
+        return self.rpc("cerefox_metadata_search", params)
+
+    # ── Usage tracking ────────────────────────────────────────────────────────
+
+    def get_config(self, key: str) -> str | None:
+        """Read a config value from cerefox_config."""
+        rows = self.rpc("cerefox_get_config", {"p_key": key})
+        # RPC returns a scalar wrapped in a list by the Supabase client
+        if isinstance(rows, str):
+            return rows
+        if isinstance(rows, list) and rows:
+            return rows[0] if isinstance(rows[0], str) else None
+        return rows if isinstance(rows, str) else None
+
+    def set_config(self, key: str, value: str) -> None:
+        """Write a config value to cerefox_config (validated against allowlist)."""
+        self.rpc("cerefox_set_config", {"p_key": key, "p_value": value})
+
+    def log_usage(
+        self,
+        operation: str,
+        access_path: str,
+        requestor: str | None = None,
+        document_id: str | None = None,
+        project_id: str | None = None,
+        query_text: str | None = None,
+        result_count: int | None = None,
+        extra: dict | None = None,
+    ) -> None:
+        """Log a usage entry (no-op if tracking is disabled in config)."""
+        try:
+            self.rpc("cerefox_log_usage", {
+                "p_operation": operation,
+                "p_access_path": access_path,
+                "p_requestor": requestor,
+                "p_document_id": document_id,
+                "p_project_id": project_id,
+                "p_query_text": query_text,
+                "p_result_count": result_count,
+                "p_extra": extra or {},
+            })
+        except Exception:
+            pass  # fire-and-forget; never block on usage logging failure
+
+    def list_usage_log(
+        self,
+        start: str | None = None,
+        end: str | None = None,
+        operation: str | None = None,
+        access_path: str | None = None,
+        requestor: str | None = None,
+        project_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Query usage log entries with optional filters."""
+        params: dict[str, Any] = {"p_limit": limit}
+        if start is not None:
+            params["p_start"] = start
+        if end is not None:
+            params["p_end"] = end
+        if operation is not None:
+            params["p_operation"] = operation
+        if access_path is not None:
+            params["p_access_path"] = access_path
+        if requestor is not None:
+            params["p_requestor"] = requestor
+        if project_id is not None:
+            params["p_project_id"] = project_id
+        return self.rpc("cerefox_list_usage_log", params)
+
+    def usage_summary(
+        self,
+        start: str | None = None,
+        end: str | None = None,
+        project_id: str | None = None,
+        access_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Get aggregated usage statistics."""
+        params: dict[str, Any] = {}
+        if start is not None:
+            params["p_start"] = start
+        if end is not None:
+            params["p_end"] = end
+        if project_id is not None:
+            params["p_project_id"] = project_id
+        if access_path is not None:
+            params["p_access_path"] = access_path
+        result = self.rpc("cerefox_usage_summary", params)
+        if isinstance(result, list) and result:
+            return result[0] if isinstance(result[0], dict) else {}
+        if isinstance(result, dict):
+            return result
+        return {}
 
     def save_note(
         self,

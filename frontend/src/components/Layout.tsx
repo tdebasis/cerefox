@@ -13,9 +13,12 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 const NAV_ITEMS = [
   { label: "Dashboard", path: "/" },
   { label: "Search", path: "/search" },
+  { label: "Metadata Search", path: "/metadata-search" },
   { label: "Ingest", path: "/ingest" },
   { label: "Projects", path: "/projects" },
   { label: "Audit Log", path: "/audit-log" },
+  { label: "Trash", path: "/trash" },
+  { label: "Analytics", path: "/analytics" },
 ];
 
 export function Layout() {
