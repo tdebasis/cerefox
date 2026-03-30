@@ -37,6 +37,7 @@ class DocSearchResultResponse(BaseModel):
     doc_source: str | None
     doc_metadata: dict[str, Any]
     doc_project_ids: list[str]
+    doc_project_names: list[str] = []
     best_score: float
     best_chunk_heading_path: list[str]
     full_content: str
@@ -58,7 +59,33 @@ class ChunkSearchResultResponse(BaseModel):
     doc_title: str
     doc_source: str | None
     doc_project_ids: list[str]
+    doc_project_names: list[str] = []
     doc_metadata: dict[str, Any]
+
+
+class MetadataSearchResultResponse(BaseModel):
+    document_id: str
+    title: str
+    doc_metadata: dict[str, Any]
+    review_status: str
+    source: str | None
+    created_at: str
+    updated_at: str
+    total_chars: int
+    chunk_count: int
+    project_ids: list[str] = []
+    project_names: list[str] = []
+    version_count: int
+    content: str | None = None
+
+
+class MetadataSearchRequest(BaseModel):
+    metadata_filter: dict[str, Any]
+    project_id: str | None = None
+    updated_since: str | None = None
+    created_since: str | None = None
+    limit: int = 10
+    include_content: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -236,6 +263,11 @@ def api_search(
                 r for r in result_dicts if status_map.get(r["document_id"]) == review_status
             ]
 
+    client.log_usage(
+        operation="search", access_path="webapp", requestor="user",
+        query_text=q, project_id=pid, result_count=len(result_dicts),
+    )
+
     return SearchResponse(
         results=result_dicts,
         query=q,
@@ -283,6 +315,45 @@ def api_list_metadata_keys(
             examples=row.get("example_values", []),
         )
         for row in raw
+    ]
+
+
+@api_router.post("/documents/metadata-search", response_model=list[MetadataSearchResultResponse])
+def api_metadata_search(
+    body: MetadataSearchRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> list[MetadataSearchResultResponse]:
+    """Search documents by metadata key-value criteria without a text search term."""
+    rows = client.metadata_search(
+        metadata_filter=body.metadata_filter,
+        project_id=body.project_id,
+        updated_since=body.updated_since,
+        created_since=body.created_since,
+        limit=body.limit,
+        include_content=body.include_content,
+    )
+    client.log_usage(
+        operation="metadata_search", access_path="webapp", requestor="user",
+        query_text=json.dumps(body.metadata_filter), project_id=body.project_id,
+        result_count=len(rows),
+    )
+    return [
+        MetadataSearchResultResponse(
+            document_id=row["document_id"],
+            title=row.get("title", ""),
+            doc_metadata=row.get("doc_metadata", {}),
+            review_status=row.get("review_status", "approved"),
+            source=row.get("source"),
+            created_at=str(row.get("created_at", "")),
+            updated_at=str(row.get("updated_at", "")),
+            total_chars=row.get("total_chars", 0),
+            chunk_count=row.get("chunk_count", 0),
+            project_ids=row.get("project_ids", []),
+            project_names=row.get("project_names", []),
+            version_count=row.get("version_count", 0),
+            content=row.get("content"),
+        )
+        for row in rows
     ]
 
 
@@ -440,6 +511,15 @@ class EditResponse(BaseModel):
     success: bool
     reindexed: bool = False
     error: str | None = None
+
+
+@api_router.get("/documents/trash")
+def api_list_trash(
+    limit: int = 50,
+    client: CerefoxClient = Depends(get_client),
+) -> list[dict[str, Any]]:
+    """List soft-deleted documents (trash bin)."""
+    return client.list_deleted_documents(limit=limit)
 
 
 @api_router.get("/documents/{document_id}")
@@ -616,12 +696,40 @@ def api_delete_document(
     document_id: str,
     client: CerefoxClient = Depends(get_client),
 ) -> dict[str, bool]:
-    """Delete a document (creates audit entry via RPC before deletion)."""
+    """Soft-delete a document (moves to trash, recoverable)."""
     try:
         client.delete_document(document_id, author="web-ui", author_type="user")
         return {"success": True}
     except Exception as exc:
         logger.error("delete_document %s failed: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@api_router.post("/documents/{document_id}/restore")
+def api_restore_document(
+    document_id: str,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, bool]:
+    """Restore a soft-deleted document from trash."""
+    try:
+        client.restore_document(document_id, author="web-ui", author_type="user")
+        return {"success": True}
+    except Exception as exc:
+        logger.error("restore_document %s failed: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@api_router.delete("/documents/{document_id}/purge")
+def api_purge_document(
+    document_id: str,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, bool]:
+    """Permanently delete a soft-deleted document (irreversible)."""
+    try:
+        client.purge_document(document_id, author="web-ui", author_type="user")
+        return {"success": True}
+    except Exception as exc:
+        logger.error("purge_document %s failed: %s", document_id, exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -687,6 +795,10 @@ def api_ingest_paste(
             update_existing=body.update_existing,
             author="web-ui",
             author_type="user",
+        )
+        client.log_usage(
+            operation="ingest", access_path="webapp", requestor="user",
+            document_id=res.document_id, result_count=res.chunk_count,
         )
         return IngestResponse(
             success=not res.skipped,
@@ -938,3 +1050,148 @@ def api_set_version_archived(
     """Set or clear the archived flag on a version. Creates an audit entry."""
     client.set_version_archived(version_id, body.archived, author="user")
     return {"archived": body.archived}
+
+
+# ── Usage tracking ────────────────────────────────────────────────────────
+
+
+class UsageLogEntryResponse(BaseModel):
+    id: str
+    logged_at: str
+    operation: str
+    access_path: str
+    requestor: str | None = None
+    document_id: str | None = None
+    doc_title: str | None = None
+    project_id: str | None = None
+    query_text: str | None = None
+    result_count: int | None = None
+    extra: dict[str, Any] = {}
+
+
+@api_router.get("/usage-log")
+def api_list_usage_log(
+    start: str | None = None,
+    end: str | None = None,
+    operation: str | None = None,
+    access_path: str | None = None,
+    requestor: str | None = None,
+    project_id: str | None = None,
+    limit: int = 100,
+    client: CerefoxClient = Depends(get_client),
+) -> list[UsageLogEntryResponse]:
+    """List usage log entries with optional filters."""
+    rows = client.list_usage_log(
+        start=start,
+        end=end,
+        operation=operation,
+        access_path=access_path,
+        requestor=requestor,
+        project_id=project_id,
+        limit=limit,
+    )
+    return [
+        UsageLogEntryResponse(
+            id=row["id"],
+            logged_at=str(row.get("logged_at", "")),
+            operation=row["operation"],
+            access_path=row["access_path"],
+            requestor=row.get("requestor"),
+            document_id=row.get("document_id"),
+            doc_title=row.get("doc_title"),
+            project_id=row.get("project_id"),
+            query_text=row.get("query_text"),
+            result_count=row.get("result_count"),
+            extra=row.get("extra", {}),
+        )
+        for row in rows
+    ]
+
+
+@api_router.get("/usage-log/export.csv")
+def api_export_usage_csv(
+    start: str | None = None,
+    end: str | None = None,
+    operation: str | None = None,
+    access_path: str | None = None,
+    requestor: str | None = None,
+    project_id: str | None = None,
+    limit: int = 10000,
+    client: CerefoxClient = Depends(get_client),
+) -> Response:
+    """Export usage log as CSV download."""
+    import csv
+    import io
+
+    rows = client.list_usage_log(
+        start=start, end=end, operation=operation,
+        access_path=access_path, reader=reader,
+        project_id=project_id, limit=limit,
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "id", "logged_at", "operation", "access_path", "requestor",
+        "document_id", "doc_title", "project_id", "query_text",
+        "result_count", "extra",
+    ])
+    for row in rows:
+        writer.writerow([
+            row.get("id", ""),
+            row.get("logged_at", ""),
+            row.get("operation", ""),
+            row.get("access_path", ""),
+            row.get("requestor", ""),
+            row.get("document_id", ""),
+            row.get("doc_title", ""),
+            row.get("project_id", ""),
+            row.get("query_text", ""),
+            row.get("result_count", ""),
+            json.dumps(row.get("extra", {})),
+        ])
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=cerefox-usage-log.csv"},
+    )
+
+
+@api_router.get("/usage-log/summary")
+def api_usage_summary(
+    start: str | None = None,
+    end: str | None = None,
+    project_id: str | None = None,
+    access_path: str | None = None,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, Any]:
+    """Get aggregated usage statistics for the analytics page."""
+    return client.usage_summary(
+        start=start, end=end, project_id=project_id, access_path=access_path,
+    )
+
+
+@api_router.get("/config/{key}")
+def api_get_config(
+    key: str,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, str | None]:
+    """Read a config value."""
+    value = client.get_config(key)
+    return {"key": key, "value": value}
+
+
+class SetConfigRequest(BaseModel):
+    value: str
+
+
+@api_router.put("/config/{key}")
+def api_set_config(
+    key: str,
+    body: SetConfigRequest,
+    client: CerefoxClient = Depends(get_client),
+) -> dict[str, str]:
+    """Write a config value (validated against allowlist)."""
+    client.set_config(key, body.value)
+    return {"key": key, "value": body.value}

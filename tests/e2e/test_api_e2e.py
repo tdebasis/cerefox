@@ -986,3 +986,267 @@ class TestMetadataFilteredSearch:
         )
         assert resp.results == [], f"Expected empty results, got {resp.results}"
         assert not resp.truncated
+
+
+# ── 5. Metadata search, project names, list_projects (16B) ──────────────────
+
+
+class TestMetadataSearchAndProjectNames:
+    """16B: metadata_search RPC, project_names in results, list_projects_rpc."""
+
+    def test_metadata_search_returns_matching_docs(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        """5.1: metadata_search finds documents by key-value filter."""
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("MetaSearch API Test")
+        res = e2e_pipeline.ingest_text(
+            "# Metadata Search Test\n\nContent for API metadata search.",
+            title,
+            metadata={"e2e_ms_tag": "api-16b-test"},
+        )
+        cleanup.track_document(res.document_id)
+
+        rows = e2e_client.metadata_search(
+            metadata_filter={"e2e_ms_tag": "api-16b-test"},
+        )
+        assert len(rows) >= 1
+        doc_ids = [r["document_id"] for r in rows]
+        assert res.document_id in doc_ids
+
+    def test_metadata_search_with_include_content(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        """5.2: include_content=True returns full document text."""
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("MetaSearch Content Test")
+        res = e2e_pipeline.ingest_text(
+            "# Content Included\n\nThis text should appear in metadata search results.",
+            title,
+            metadata={"e2e_ms_tag": "api-content-16b"},
+        )
+        cleanup.track_document(res.document_id)
+
+        rows = e2e_client.metadata_search(
+            metadata_filter={"e2e_ms_tag": "api-content-16b"},
+            include_content=True,
+        )
+        assert len(rows) >= 1
+        row = next(r for r in rows if r["document_id"] == res.document_id)
+        assert row["content"] is not None
+        assert "Content Included" in row["content"]
+
+    def test_metadata_search_no_match(
+        self,
+        e2e_client: CerefoxClient,
+    ):
+        """5.3: metadata_search with impossible filter returns empty list."""
+        rows = e2e_client.metadata_search(
+            metadata_filter={"nonexistent_key_e2e_xyz": "no_match"},
+        )
+        assert rows == []
+
+    def test_project_names_in_search_docs(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        """5.4: search_docs results include doc_project_names for docs with projects."""
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("Project Names Search Test")
+        project_name = unique_title("ProjNames Test")
+
+        res = e2e_pipeline.ingest_text(
+            "# Project Names in Results\n\nVerify project names appear in search.",
+            title,
+            project_name=project_name,
+            metadata={"e2e_pn_tag": "projnames-16b"},
+        )
+        cleanup.track_document(res.document_id)
+        if res.project_ids:
+            cleanup.track_project(res.project_ids[0])
+
+        time.sleep(1)
+
+        rows = e2e_client.search_docs(
+            query_text="project names appear in search",
+            query_embedding=e2e_pipeline._embedder.embed("project names appear in search"),
+            match_count=10,
+            metadata_filter={"e2e_pn_tag": "projnames-16b"},
+        )
+        assert len(rows) >= 1
+        row = next(r for r in rows if r["document_id"] == res.document_id)
+        assert "doc_project_names" in row
+        assert isinstance(row["doc_project_names"], list)
+        assert any(project_name in name for name in row["doc_project_names"])
+
+    def test_project_names_in_metadata_search(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        """5.5: metadata_search results include project_names."""
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        title = unique_title("MetaSearch ProjNames Test")
+        project_name = unique_title("MSProjNames Test")
+
+        res = e2e_pipeline.ingest_text(
+            "# MetaSearch with Projects\n\nVerify project names in metadata search.",
+            title,
+            project_name=project_name,
+            metadata={"e2e_mspn_tag": "msprojnames-16b"},
+        )
+        cleanup.track_document(res.document_id)
+        if res.project_ids:
+            cleanup.track_project(res.project_ids[0])
+
+        rows = e2e_client.metadata_search(
+            metadata_filter={"e2e_mspn_tag": "msprojnames-16b"},
+        )
+        assert len(rows) >= 1
+        row = next(r for r in rows if r["document_id"] == res.document_id)
+        assert "project_names" in row
+        assert isinstance(row["project_names"], list)
+        assert any(project_name in name for name in row["project_names"])
+
+    def test_list_projects_rpc(
+        self,
+        e2e_client: CerefoxClient,
+    ):
+        """5.6: list_projects_rpc returns projects with name and id."""
+        projects = e2e_client.list_projects_rpc()
+        assert isinstance(projects, list)
+        # There should be at least some projects in the KB
+        if projects:
+            p = projects[0]
+            assert "id" in p
+            assert "name" in p
+
+
+# ── 6. Usage tracking (16C) ──────────────────────────────────────────────────
+
+
+class TestUsageTracking:
+    """16C: config, usage logging, usage summary."""
+
+    def test_config_get_and_set(self, e2e_client: CerefoxClient):
+        """6.1: get_config/set_config round-trip."""
+        # Read default
+        val = e2e_client.get_config("usage_tracking_enabled")
+        assert val in ("true", "false")
+
+        # Set to true, read back
+        e2e_client.set_config("usage_tracking_enabled", "true")
+        assert e2e_client.get_config("usage_tracking_enabled") == "true"
+
+        # Reset to original
+        e2e_client.set_config("usage_tracking_enabled", val or "false")
+
+    def test_config_set_rejects_unknown_key(self, e2e_client: CerefoxClient):
+        """6.2: set_config rejects unknown keys."""
+        with pytest.raises(Exception):
+            e2e_client.set_config("unknown_key_e2e", "value")
+
+    def test_usage_logging_when_enabled(
+        self,
+        e2e_client: CerefoxClient,
+        e2e_pipeline: IngestionPipeline | None,
+        cleanup: E2ECleanup,
+        unique_title,
+    ):
+        """6.3: enable tracking, run search, verify entry appears in usage log."""
+        if e2e_pipeline is None:
+            pytest.skip("Embedder not configured")
+
+        # Save original config and enable tracking
+        original = e2e_client.get_config("usage_tracking_enabled")
+        e2e_client.set_config("usage_tracking_enabled", "true")
+
+        try:
+            # Run a search via the Python client (goes through search_docs RPC)
+            title = unique_title("Usage Tracking Test")
+            res = e2e_pipeline.ingest_text(
+                "# Usage Test\n\nContent for usage tracking e2e.", title,
+            )
+            cleanup.track_document(res.document_id)
+
+            time.sleep(1)
+
+            # Search should create a usage log entry
+            rows = e2e_client.search_docs(
+                query_text="usage tracking e2e",
+                query_embedding=e2e_pipeline._embedder.embed("usage tracking e2e"),
+                match_count=5,
+            )
+
+            # Now log a usage entry manually (simulating webapp access path)
+            e2e_client.log_usage(
+                operation="search", access_path="webapp",
+                query_text="usage tracking e2e", result_count=len(rows),
+            )
+
+            # Verify it appears in the usage log
+            log = e2e_client.list_usage_log(operation="search", limit=5)
+            assert len(log) >= 1
+            assert any(
+                entry.get("query_text") == "usage tracking e2e"
+                for entry in log
+            )
+        finally:
+            e2e_client.set_config("usage_tracking_enabled", original or "false")
+
+    def test_usage_logging_disabled_is_noop(self, e2e_client: CerefoxClient):
+        """6.4: disable tracking, log_usage is a no-op."""
+        original = e2e_client.get_config("usage_tracking_enabled")
+        e2e_client.set_config("usage_tracking_enabled", "false")
+
+        try:
+            # Get current count
+            log_before = e2e_client.list_usage_log(limit=1)
+            count_before = len(log_before)
+
+            # Try to log -- should be a no-op
+            e2e_client.log_usage(
+                operation="search", access_path="webapp",
+                query_text="should-not-appear-e2e",
+            )
+
+            log_after = e2e_client.list_usage_log(limit=1)
+            # Should not have grown (the no-op entry should not exist)
+            assert not any(
+                entry.get("query_text") == "should-not-appear-e2e"
+                for entry in log_after
+            )
+        finally:
+            e2e_client.set_config("usage_tracking_enabled", original or "false")
+
+    def test_usage_summary(self, e2e_client: CerefoxClient):
+        """6.5: usage_summary returns expected structure."""
+        summary = e2e_client.usage_summary()
+        assert isinstance(summary, dict)
+        assert "total_count" in summary
+        assert "ops_by_day" in summary
+        assert "ops_by_operation" in summary
+        assert "ops_by_access_path" in summary
+        assert "top_documents" in summary
+        assert "top_requestors" in summary

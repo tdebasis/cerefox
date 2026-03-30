@@ -395,6 +395,11 @@ def search(
 
     click.echo(f"\n{len(resp.results)} result(s) shown  ({resp.response_bytes:,} bytes).")
 
+    client.log_usage(
+        operation="search", access_path="cli", requestor="user",
+        query_text=query, project_id=project_id, result_count=len(resp.results),
+    )
+
 
 # ── list-docs ─────────────────────────────────────────────────────────────────
 
@@ -487,6 +492,100 @@ def list_metadata_keys() -> None:
         examples = ", ".join(k.get("example_values") or []) or "—"
         click.echo(f"{k['key']:<25}  {k.get('doc_count', 0):>5}  {examples}")
     click.echo(f"\n{len(keys)} key(s) found.")
+
+
+@cli.command("metadata-search")
+@click.option("--filter", "filter_json", required=True, help="JSON metadata filter, e.g. '{\"type\":\"decision\"}'")
+@click.option("--project", "project_name", default=None, help="Filter by project name")
+@click.option("--updated-since", default=None, help="ISO-8601 timestamp lower bound for updated_at")
+@click.option("--created-since", default=None, help="ISO-8601 timestamp lower bound for created_at")
+@click.option("--limit", default=10, help="Max results (default: 10)")
+@click.option("--include-content", is_flag=True, help="Include full document text")
+def metadata_search(
+    filter_json: str,
+    project_name: str | None,
+    updated_since: str | None,
+    created_since: str | None,
+    limit: int,
+    include_content: bool,
+) -> None:
+    """Search documents by metadata key-value criteria."""
+    import json as json_mod
+
+    try:
+        metadata_filter = json_mod.loads(filter_json)
+    except json_mod.JSONDecodeError as exc:
+        click.echo(f"Invalid JSON filter: {exc}", err=True)
+        raise SystemExit(1)
+
+    if not isinstance(metadata_filter, dict) or not metadata_filter:
+        click.echo("metadata_filter must be a non-empty JSON object", err=True)
+        raise SystemExit(1)
+
+    settings = Settings()
+    client = _get_client(settings)
+
+    project_id: str | None = None
+    if project_name:
+        projects = client.list_projects()
+        for p in projects:
+            if p["name"].lower() == project_name.lower():
+                project_id = p["id"]
+                break
+        if project_id is None:
+            click.echo(f"Project not found: {project_name}", err=True)
+            raise SystemExit(1)
+
+    rows = client.metadata_search(
+        metadata_filter=metadata_filter,
+        project_id=project_id,
+        updated_since=updated_since,
+        created_since=created_since,
+        limit=limit,
+        include_content=include_content,
+    )
+
+    if not rows:
+        click.echo("No documents match the metadata filter.")
+        return
+
+    for row in rows:
+        proj_names = row.get("project_names") or []
+        projects_str = f"  projects: {', '.join(proj_names)}" if proj_names else ""
+        click.echo(f"  {row['title']}  (id: {row['document_id']})")
+        click.echo(f"    {row.get('total_chars', 0)} chars | {row.get('review_status', 'approved')} | updated {str(row.get('updated_at', ''))[:10]}{projects_str}")
+        if include_content and row.get("content"):
+            click.echo(f"    ---\n{row['content'][:500]}{'...' if len(row.get('content', '')) > 500 else ''}")
+        click.echo()
+    click.echo(f"{len(rows)} document(s) found.")
+
+
+@cli.command("config-get")
+@click.argument("key")
+def config_get(key: str) -> None:
+    """Read a config value (e.g., usage_tracking_enabled)."""
+    settings = Settings()
+    client = _get_client(settings)
+    value = client.get_config(key)
+    if value is None:
+        click.echo(f"{key}: (not set)")
+    else:
+        click.echo(f"{key}: {value}")
+
+
+@cli.command("config-set")
+@click.argument("key")
+@click.argument("value")
+def config_set(key: str, value: str) -> None:
+    """Set a config value (e.g., cerefox config-set usage_tracking_enabled true)."""
+    settings = Settings()
+    client = _get_client(settings)
+    try:
+        client.set_config(key, value)
+        click.echo(f"{key} = {value}")
+    except Exception as exc:
+        click.echo(f"Error: {exc}", err=True)
+        raise SystemExit(1)
 
 
 # ── reindex ───────────────────────────────────────────────────────────────────
@@ -609,6 +708,11 @@ def get_doc(document_id: str, version_id: str | None) -> None:
     click.echo("")
     click.echo(doc.get("full_content") or "")
 
+    client.log_usage(
+        operation="get_document", access_path="cli", requestor="user",
+        document_id=document_id, result_count=1,
+    )
+
 
 # ── list-versions ─────────────────────────────────────────────────────────────
 
@@ -636,6 +740,11 @@ def list_versions(document_id: str) -> None:
             f"v{v['version_number']:<3}  {v['created_at']:<27}  {v['source']:<10}  "
             f"{v['chunk_count']:>6}  {v['total_chars']:>8}  {v['version_id']}"
         )
+
+    client.log_usage(
+        operation="list_versions", access_path="cli", requestor="user",
+        document_id=document_id, result_count=len(versions),
+    )
 
 
 # ── web ───────────────────────────────────────────────────────────────────────

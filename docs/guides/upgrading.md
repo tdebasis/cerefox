@@ -61,14 +61,43 @@ open http://localhost:8000/app/
 
 Most upgrades require no special steps beyond the standard checklist above. Notes below only apply when upgrading across specific version boundaries.
 
+### Upgrading to v0.1.11+ (from v0.1.10)
+
+**Two new migrations**:
+- `0006_usage_log.sql` -- adds `cerefox_config` and `cerefox_usage_log` tables with 5 new RPCs
+- `0007_usage_log_requestor.sql` -- renames `reader` column to `requestor` in `cerefox_usage_log`
+  and updates all 3 usage RPCs. Non-destructive (existing data preserved).
+
+Both are applied automatically by `db_migrate.py` (step 3 above). After migrations, also
+redeploy RPCs via `db_deploy.py` (step 4) to update the canonical function definitions.
+
+**New REST API endpoints**: `/api/v1/usage-log`, `/api/v1/usage-log/export.csv`,
+`/api/v1/usage-log/summary`, `/api/v1/config/{key}`.
+
+**Analytics page**: new page at `/app/analytics` with 7 interactive visualizations
+(Nivo charts), date/project/path filters, usage tracking toggle, and CSV export.
+
+**Usage tracking is opt-in**: disabled by default. Enable via CLI:
+```bash
+cerefox config-set usage_tracking_enabled true
+```
+Or via the toggle on the Analytics page. When enabled, **all operations** (both reads
+and writes) are logged with operation type, access path, requestor identity, query text,
+and result count.
+
+**Requestor attribution**: each usage log entry records who made the call:
+- MCP tools: `"mcp-agent"` for reads, the `author` parameter value for writes (ingest)
+- Web UI: `"user"`
+- CLI: `"user"`
+- Primitive Edge Functions: not attributed (access_path identifies the caller type)
+
+**Edge Functions updated**: all primitive Edge Functions and `cerefox-mcp` now include
+fire-and-forget usage logging calls for both reads and writes. Redeploy all Edge
+Functions (step 6 above).
+
 ### Upgrading to v0.1.10+ (from any earlier version)
 
-**New Edge Function**: `cerefox-metadata-search` must be deployed (step 6 above). The
-standard checklist does not yet include it -- add this line:
-
-```bash
-npx supabase functions deploy cerefox-metadata-search
-```
+**New Edge Function**: `cerefox-metadata-search` must be deployed (included in step 6 above).
 
 **Breaking change -- MCP tool `project_id` input removed**: The `cerefox_search`,
 `cerefox_ingest`, and `cerefox_metadata_search` tools in `cerefox-mcp` now accept

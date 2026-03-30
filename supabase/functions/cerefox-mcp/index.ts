@@ -23,6 +23,8 @@ import { handleListMetadataKeys } from "./tools/metadata.ts";
 import { handleGetDocument } from "./tools/get-document.ts";
 import { handleListVersions } from "./tools/list-versions.ts";
 import { handleGetAuditLog } from "./tools/audit-log.ts";
+import { handleListProjects } from "./tools/list-projects.ts";
+import { handleMetadataSearch } from "./tools/metadata-search.ts";
 
 const MCP_VERSION = "2025-03-26";
 const SERVER_NAME = "cerefox";
@@ -61,6 +63,11 @@ const TOOLS = [
           type: "integer",
           description:
             "Optional response size budget in bytes. Results are dropped whole until the budget is satisfied; a truncated flag is set when results are dropped. Defaults to the server maximum (200000). Pass a smaller value if your context window is limited. Values above the server maximum are silently capped.",
+        },
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request (e.g., "Claude Code", "archiver"). Recorded in the usage log for attribution. Defaults to "mcp-agent" if not provided.',
         },
       },
     },
@@ -111,7 +118,13 @@ const TOOLS = [
       "List all metadata keys currently in use across documents in the Cerefox knowledge base. Returns each key with its document count and up to 5 example values.",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
+        },
+      },
     },
   },
   {
@@ -130,6 +143,11 @@ const TOOLS = [
           type: "string",
           description: "UUID of a specific archived version to retrieve (optional)",
         },
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
+        },
       },
     },
   },
@@ -144,6 +162,11 @@ const TOOLS = [
         document_id: {
           type: "string",
           description: "UUID of the document whose version history to list",
+        },
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
         },
       },
     },
@@ -175,6 +198,73 @@ const TOOLS = [
         limit: {
           type: "integer",
           description: "Maximum number of entries to return (default: 50, max: 200)",
+        },
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
+        },
+      },
+    },
+  },
+  {
+    name: "cerefox_list_projects",
+    description:
+      "List all projects with their names and IDs. Use this to discover available projects before filtering by project_name in other tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
+        },
+      },
+    },
+  },
+  {
+    name: "cerefox_metadata_search",
+    description:
+      "Find documents by metadata key-value criteria without a text search term. Use to discover documents tagged with specific attributes, browse by taxonomy, or retrieve messages/tasks by type and status.",
+    inputSchema: {
+      type: "object",
+      required: ["metadata_filter"],
+      properties: {
+        metadata_filter: {
+          type: "object",
+          description:
+            "Key-value pairs; ALL must match (AND semantics). Example: {\"type\": \"decision\", \"status\": \"active\"}. Call cerefox_list_metadata_keys first to discover available keys.",
+          additionalProperties: { type: "string" },
+        },
+        project_name: {
+          type: "string",
+          description: "Restrict to a project by name (optional)",
+        },
+        updated_since: {
+          type: "string",
+          description: "ISO-8601 timestamp; only docs updated on/after (optional)",
+        },
+        created_since: {
+          type: "string",
+          description: "ISO-8601 timestamp; only docs created on/after (optional)",
+        },
+        limit: {
+          type: "integer",
+          description: "Max results (default 10)",
+        },
+        include_content: {
+          type: "boolean",
+          description: "Include full document text (default false)",
+        },
+        max_bytes: {
+          type: "integer",
+          description:
+            "Soft cap on total response bytes when include_content is true. Defaults to server maximum (200000).",
+        },
+        requestor: {
+          type: "string",
+          description:
+            'Name of the agent or user making this request. Recorded in the usage log. Defaults to "mcp-agent" if not provided.',
         },
       },
     },
@@ -215,13 +305,17 @@ async function dispatchToolCall(
       return await handleIngest(args, openaiKey);
     }
     case "cerefox_list_metadata_keys":
-      return await handleListMetadataKeys();
+      return await handleListMetadataKeys(args);
     case "cerefox_get_document":
       return await handleGetDocument(args);
     case "cerefox_list_versions":
       return await handleListVersions(args);
     case "cerefox_get_audit_log":
       return await handleGetAuditLog(args);
+    case "cerefox_list_projects":
+      return await handleListProjects(args);
+    case "cerefox_metadata_search":
+      return await handleMetadataSearch(args);
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

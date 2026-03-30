@@ -36,6 +36,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   try {
+    const body = await req.json().catch(() => ({}));
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -48,6 +49,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
         headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
       });
     }
+
+    // Fire-and-forget usage logging
+    Promise.resolve(supabase.rpc("cerefox_log_usage", {
+      p_operation: "list_metadata_keys",
+      p_access_path: "edge-function",
+      p_requestor: body.requestor ?? null,
+      p_result_count: (data ?? []).length,
+    })).catch(() => {});
 
     return new Response(JSON.stringify(data ?? []), {
       status: 200,

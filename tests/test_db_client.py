@@ -238,6 +238,105 @@ class TestProjectMethods:
         result = cerefox_client.list_projects()
         assert result == []
 
+    def test_list_projects_rpc_calls_rpc(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        projects = [{"id": "p1", "name": "Alpha", "description": "First"}]
+        mock_supabase_client.rpc.return_value.execute.return_value.data = projects
+        result = cerefox_client.list_projects_rpc()
+        assert result == projects
+        mock_supabase_client.rpc.assert_called_with("cerefox_list_projects", {})
+
+    def test_metadata_search_calls_rpc_with_params(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        rows = [{"document_id": "d1", "title": "Test"}]
+        mock_supabase_client.rpc.return_value.execute.return_value.data = rows
+        result = cerefox_client.metadata_search(
+            metadata_filter={"type": "decision"},
+            project_id="p1",
+            updated_since="2026-03-01",
+            limit=5,
+            include_content=True,
+            max_bytes=50000,
+        )
+        assert result == rows
+        call_args = mock_supabase_client.rpc.call_args
+        assert call_args[0][0] == "cerefox_metadata_search"
+        params = call_args[0][1]
+        assert params["p_metadata_filter"] == {"type": "decision"}
+        assert params["p_project_id"] == "p1"
+        assert params["p_updated_since"] == "2026-03-01"
+        assert params["p_limit"] == 5
+        assert params["p_include_content"] is True
+        assert params["p_max_bytes"] == 50000
+
+    def test_metadata_search_omits_max_bytes_when_none(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.rpc.return_value.execute.return_value.data = []
+        cerefox_client.metadata_search(metadata_filter={"key": "val"})
+        params = mock_supabase_client.rpc.call_args[0][1]
+        assert "p_max_bytes" not in params
+
+    def test_get_config_returns_value(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.rpc.return_value.execute.return_value.data = "true"
+        result = cerefox_client.get_config("usage_tracking_enabled")
+        assert result == "true"
+        mock_supabase_client.rpc.assert_called_with("cerefox_get_config", {"p_key": "usage_tracking_enabled"})
+
+    def test_set_config_calls_rpc(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.rpc.return_value.execute.return_value.data = None
+        cerefox_client.set_config("usage_tracking_enabled", "true")
+        mock_supabase_client.rpc.assert_called_with(
+            "cerefox_set_config", {"p_key": "usage_tracking_enabled", "p_value": "true"}
+        )
+
+    def test_log_usage_calls_rpc(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.rpc.return_value.execute.return_value.data = None
+        cerefox_client.log_usage(
+            operation="search", access_path="webapp",
+            query_text="test", result_count=5,
+        )
+        call_args = mock_supabase_client.rpc.call_args
+        assert call_args[0][0] == "cerefox_log_usage"
+        params = call_args[0][1]
+        assert params["p_operation"] == "search"
+        assert params["p_access_path"] == "webapp"
+        assert params["p_result_count"] == 5
+
+    def test_log_usage_swallows_exceptions(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        mock_supabase_client.rpc.side_effect = RuntimeError("DB error")
+        # Should not raise
+        cerefox_client.log_usage(operation="search", access_path="webapp")
+
+    def test_list_usage_log_calls_rpc(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        rows = [{"id": "u1", "operation": "search"}]
+        mock_supabase_client.rpc.return_value.execute.return_value.data = rows
+        result = cerefox_client.list_usage_log(operation="search", limit=10)
+        assert result == rows
+        params = mock_supabase_client.rpc.call_args[0][1]
+        assert params["p_operation"] == "search"
+        assert params["p_limit"] == 10
+
+    def test_usage_summary_calls_rpc(
+        self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
+    ) -> None:
+        summary = {"total_count": 42, "ops_by_day": []}
+        mock_supabase_client.rpc.return_value.execute.return_value.data = summary
+        result = cerefox_client.usage_summary()
+        assert result == summary
+
     def test_get_project_doc_counts_returns_counts(
         self, cerefox_client: CerefoxClient, mock_supabase_client: MagicMock
     ) -> None:

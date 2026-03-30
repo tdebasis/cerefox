@@ -37,10 +37,12 @@ Cerefox is **asynchronous shared memory, not a message bus**. It solves the pers
 |---------|---------|
 | **Hybrid search** | Combines full-text (BM25) + semantic (vector) search with a configurable alpha weight |
 | **Metadata-filtered search** | JSONB containment filter (`@>`) on document metadata; server-side, GIN-indexed; composable with project filter and all search modes; available across all access paths (MCP, CLI, web UI, GPT Actions) |
+| **Metadata search** | Standalone metadata-only search (no text query needed); find documents by key-value criteria, project, and date range; optional content inclusion with byte budget; dedicated MCP tool, CLI command, and web UI page |
+| **Project discovery** | `cerefox_list_projects` MCP tool for agents to discover available projects; all search results include human-readable `project_names` alongside UUIDs |
 | **Heading-aware chunking** | Greedy section accumulation — H1/H2/H3 sections accumulate until MAX_CHUNK_CHARS; heading breadcrumb preserved per chunk |
 | **Cloud embeddings** | OpenAI `text-embedding-3-small` (768-dim) via API — or swap to Fireworks AI |
 | **Remote MCP endpoint** | `cerefox-mcp` Supabase Edge Function — MCP Streamable HTTP; connect Claude Desktop, Claude Code, or Cursor with just a URL and anon key; no Python install needed |
-| **Local MCP server (legacy)** | `cerefox mcp` stdio server — fallback for offline use or development; requires Python + uv + local clone |
+| **Local MCP server** | `cerefox mcp` stdio server -- local alternative with zero Edge Function usage, lower latency, and offline support; requires Python + uv + local clone |
 | **Web UI** | React + TypeScript SPA (Mantine UI) at `/app/`; FastAPI JSON API backend; Markdown viewer, search with 4 modes, document editing, project management |
 | **Multi-format ingest** | `.md`, `.txt`, `.pdf` (pypdf), `.docx` (python-docx) |
 | **Batch ingest** | `cerefox ingest-dir` recurses directories |
@@ -50,6 +52,8 @@ Cerefox is **asynchronous shared memory, not a message bus**. It solves the pers
 | **Audit log** | Immutable, append-only log of all write operations (create, update, delete, status change). Author attribution with `author_type` ('user' or 'agent'). Browsable via web UI, queryable via MCP tool and Edge Function |
 | **Review status** | Schema-level `review_status` on documents (`approved` / `pending_review`). Auto-transitions based on author_type. Filterable on search |
 | **Version governance** | Version archival (protect specific versions from cleanup), configurable retention (`CEREFOX_VERSION_CLEANUP_ENABLED`), version diff viewer |
+| **Usage tracking** | Opt-in logging of all operations (reads and writes) across all access paths. Tracks operation type, access path (remote-mcp, local-mcp, edge-function, webapp, cli), requestor identity, query text, and result count. Controlled via `cerefox config-set usage_tracking_enabled true/false` -- no redeploy needed |
+| **Analytics dashboard** | `/app/analytics` -- 7 interactive charts: calls per day, access path breakdown, top documents, top readers, operations donut, reader word cloud, and reader-to-document access pattern visualization (HEB). Date range + project + path filters. CSV export. |
 
 ---
 

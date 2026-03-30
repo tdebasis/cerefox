@@ -42,10 +42,16 @@ CREATE TABLE IF NOT EXISTS cerefox_documents (
     review_status   TEXT        NOT NULL DEFAULT 'approved',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Soft delete: NULL = active, timestamp = deleted (recoverable).
+    -- Search indexes exclude soft-deleted docs. Purge does the real CASCADE DELETE.
+    deleted_at      TIMESTAMPTZ DEFAULT NULL,
 
     CONSTRAINT cerefox_documents_hash_unique UNIQUE (content_hash),
     CONSTRAINT cerefox_documents_review_status_check CHECK (review_status IN ('approved', 'pending_review'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_documents_deleted_at
+    ON cerefox_documents (deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- ── Document versions ──────────────────────────────────────────────────────────
 -- One row per archived version of a document. Created automatically before each
@@ -103,7 +109,7 @@ CREATE TABLE IF NOT EXISTS cerefox_audit_log (
 
     CONSTRAINT cerefox_audit_log_operation_check CHECK (
         operation IN ('create', 'update-content', 'update-metadata', 'delete',
-                      'status-change', 'archive', 'unarchive')
+                      'status-change', 'archive', 'unarchive', 'restore')
     ),
     CONSTRAINT cerefox_audit_log_author_type_check CHECK (author_type IN ('user', 'agent'))
 );
@@ -292,6 +298,51 @@ BEGIN
 END;
 $$;
 
+-- ── Config table ─────────────────────────────────────────────────────────────
+-- Key-value configuration stored in Postgres. Edge Functions and Python read
+-- this at call time -- no redeploy needed to toggle settings.
+-- Currently used for: usage_tracking_enabled (true/false).
+
+CREATE TABLE IF NOT EXISTS cerefox_config (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+-- Seed default config (idempotent)
+INSERT INTO cerefox_config (key, value)
+VALUES ('usage_tracking_enabled', 'false')
+ON CONFLICT (key) DO NOTHING;
+
+
+-- ── Usage log ────────────────────────────────────────────────────────────────
+-- Tracks read operations across all access paths. Opt-in; controlled by
+-- cerefox_config 'usage_tracking_enabled'. Feeds the analytics page.
+
+CREATE TABLE IF NOT EXISTS cerefox_usage_log (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    logged_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    operation    TEXT NOT NULL,
+    access_path  TEXT NOT NULL,
+    requestor    TEXT,
+    document_id  UUID REFERENCES cerefox_documents(id) ON DELETE SET NULL,
+    project_id   UUID REFERENCES cerefox_projects(id) ON DELETE SET NULL,
+    query_text   TEXT,
+    result_count INT,
+    extra        JSONB DEFAULT '{}'::JSONB
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_log_logged_at
+    ON cerefox_usage_log (logged_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_log_operation_logged_at
+    ON cerefox_usage_log (operation, logged_at DESC);
+CREATE INDEX IF NOT EXISTS idx_usage_log_access_path
+    ON cerefox_usage_log (access_path);
+CREATE INDEX IF NOT EXISTS idx_usage_log_requestor
+    ON cerefox_usage_log (requestor) WHERE requestor IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_usage_log_document_id
+    ON cerefox_usage_log (document_id) WHERE document_id IS NOT NULL;
+
+
 -- ── Row Level Security ────────────────────────────────────────────────────────
 -- Enable RLS on all tables. No permissive policies are added: direct table
 -- access via the anon key (PostgREST) is denied by default.
@@ -310,3 +361,5 @@ ALTER TABLE cerefox_document_projects     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_document_versions     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_audit_log              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cerefox_migrations            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_config                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cerefox_usage_log             ENABLE ROW LEVEL SECURITY;

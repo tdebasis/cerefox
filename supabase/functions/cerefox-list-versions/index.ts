@@ -63,6 +63,15 @@ Deno.serve(async (req: Request): Promise<Response> => {
       });
     }
 
+    // Fire-and-forget usage logging
+    Promise.resolve(supabase.rpc("cerefox_log_usage", {
+      p_operation: "list_versions",
+      p_access_path: "edge-function",
+      p_requestor: body.requestor ?? null,
+      p_document_id: document_id,
+      p_result_count: (data ?? []).length,
+    })).catch(() => {});
+
     return new Response(JSON.stringify(data ?? []), {
       status: 200,
       headers: { ...CORS_HEADERS, "Content-Type": "application/json" },

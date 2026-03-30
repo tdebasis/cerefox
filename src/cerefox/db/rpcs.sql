@@ -47,12 +47,22 @@ DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID);
 DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID, FLOAT);
 DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT, INT, INT);
 
+-- Iteration 16B: Drop pre-project_names signatures so we can add doc_project_names TEXT[]
+-- to all RETURNS TABLE shapes. Also drops reconstruct_doc and get_document for the same reason.
+DROP FUNCTION IF EXISTS cerefox_hybrid_search(TEXT, VECTOR(768), INT, FLOAT, BOOLEAN, UUID, FLOAT, JSONB);
+DROP FUNCTION IF EXISTS cerefox_fts_search(TEXT, INT, UUID, JSONB);
+DROP FUNCTION IF EXISTS cerefox_semantic_search(VECTOR(768), INT, BOOLEAN, UUID, FLOAT, JSONB);
+DROP FUNCTION IF EXISTS cerefox_search_docs(TEXT, VECTOR(768), INT, FLOAT, UUID, FLOAT, INT, INT, JSONB);
+DROP FUNCTION IF EXISTS cerefox_reconstruct_doc(UUID);
+DROP FUNCTION IF EXISTS cerefox_get_document(UUID, UUID);
+
 -- ── Shared return type note ────────────────────────────────────────────────────
 -- All chunk-level search RPCs return the same shape for consistency:
 --   chunk_id, document_id, chunk_index, title, content, heading_path,
---   heading_level, score, doc_title, doc_source, doc_project_ids, doc_metadata,
---   version_count
+--   heading_level, score, doc_title, doc_source, doc_project_ids,
+--   doc_project_names, doc_metadata, version_count
 -- Note: doc_project_ids is UUID[] (array) — a document can belong to many projects.
+-- Note: doc_project_names is TEXT[] (array) — human-readable project names.
 -- Note: version_count is INT — number of archived versions for the parent document.
 --       Agents and the web UI use this to know when previous versions are available
 --       for retrieval. 0 means the current content has never been overwritten.
@@ -87,6 +97,7 @@ RETURNS TABLE (
     doc_title       TEXT,
     doc_source      TEXT,
     doc_project_ids UUID[],
+    doc_project_names TEXT[],
     doc_metadata    JSONB,
     version_count   INT
 )
@@ -107,6 +118,7 @@ BEGIN
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
             WHERE c.version_id IS NULL
+              AND d.deleted_at IS NULL
               AND c.fts @@ query_fts
               AND (p_project_id IS NULL OR EXISTS (
                       SELECT 1 FROM cerefox_document_projects dp
@@ -128,6 +140,7 @@ BEGIN
             FROM cerefox_chunks c
             JOIN cerefox_documents d ON c.document_id = d.id
             WHERE c.version_id IS NULL
+              AND d.deleted_at IS NULL
               AND (p_project_id IS NULL OR EXISTS (
                       SELECT 1 FROM cerefox_document_projects dp
                       WHERE dp.document_id = d.id AND dp.project_id = p_project_id
@@ -170,6 +183,9 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
+        ARRAY(SELECT p.name FROM cerefox_projects p
+              JOIN cerefox_document_projects dp ON p.id = dp.project_id
+              WHERE dp.document_id = d.id) AS doc_project_names,
         d.metadata      AS doc_metadata,
         (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
          WHERE dv.document_id = d.id) AS version_count
@@ -206,6 +222,7 @@ RETURNS TABLE (
     doc_title       TEXT,
     doc_source      TEXT,
     doc_project_ids UUID[],
+    doc_project_names TEXT[],
     doc_metadata    JSONB,
     version_count   INT
 )
@@ -230,12 +247,16 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
+        ARRAY(SELECT p.name FROM cerefox_projects p
+              JOIN cerefox_document_projects dp ON p.id = dp.project_id
+              WHERE dp.document_id = d.id) AS doc_project_names,
         d.metadata      AS doc_metadata,
         (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
          WHERE dv.document_id = d.id) AS version_count
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
     WHERE c.version_id IS NULL
+              AND d.deleted_at IS NULL
       AND c.fts @@ query_fts
       AND (p_project_id IS NULL OR EXISTS (
               SELECT 1 FROM cerefox_document_projects dp
@@ -270,6 +291,7 @@ RETURNS TABLE (
     doc_title       TEXT,
     doc_source      TEXT,
     doc_project_ids UUID[],
+    doc_project_names TEXT[],
     doc_metadata    JSONB,
     version_count   INT
 )
@@ -297,12 +319,16 @@ BEGIN
         d.source        AS doc_source,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
+        ARRAY(SELECT p.name FROM cerefox_projects p
+              JOIN cerefox_document_projects dp ON p.id = dp.project_id
+              WHERE dp.document_id = d.id) AS doc_project_names,
         d.metadata      AS doc_metadata,
         (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
          WHERE dv.document_id = d.id) AS version_count
     FROM cerefox_chunks c
     JOIN cerefox_documents d ON c.document_id = d.id
     WHERE c.version_id IS NULL
+              AND d.deleted_at IS NULL
       AND (p_project_id IS NULL OR EXISTS (
               SELECT 1 FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id AND dp.project_id = p_project_id
@@ -341,6 +367,7 @@ RETURNS TABLE (
     doc_source      TEXT,
     doc_metadata    JSONB,
     doc_project_ids UUID[],
+    doc_project_names TEXT[],
     full_content    TEXT,
     chunk_count     INT,
     total_chars     INT,
@@ -358,6 +385,9 @@ AS $$
         d.metadata      AS doc_metadata,
         ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
               WHERE dp.document_id = d.id) AS doc_project_ids,
+        ARRAY(SELECT p.name FROM cerefox_projects p
+              JOIN cerefox_document_projects dp ON p.id = dp.project_id
+              WHERE dp.document_id = d.id) AS doc_project_names,
         STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
         COUNT(*)::INT   AS chunk_count,
         SUM(c.char_count)::INT AS total_chars,
@@ -484,6 +514,7 @@ RETURNS TABLE (
     doc_source               TEXT,
     doc_metadata             JSONB,
     doc_project_ids          UUID[],
+    doc_project_names        TEXT[],
     best_score               FLOAT,
     best_chunk_heading_path  TEXT[],
     full_content             TEXT,
@@ -522,6 +553,7 @@ AS $$
             cr.doc_source,
             cr.doc_metadata,
             cr.doc_project_ids,
+            cr.doc_project_names,
             cr.version_count,
             d.updated_at       AS doc_updated_at
         FROM chunk_results cr
@@ -597,6 +629,7 @@ AS $$
         td.doc_source,
         td.doc_metadata,
         td.doc_project_ids,
+        td.doc_project_names,
         td.best_score,
         td.best_chunk_heading_path,
         ac.full_content,
@@ -776,21 +809,22 @@ $$;
 -- Pass a specific version UUID to retrieve an archived version.
 -- Version UUIDs are returned by cerefox_list_document_versions.
 
-DROP FUNCTION IF EXISTS cerefox_get_document(UUID, UUID);
 CREATE FUNCTION cerefox_get_document(
     p_document_id UUID,
     p_version_id  UUID DEFAULT NULL
 )
 RETURNS TABLE (
-    document_id  UUID,
-    doc_title    TEXT,
-    doc_source   TEXT,
-    doc_metadata JSONB,
-    version_id   UUID,
-    full_content TEXT,
-    chunk_count  INT,
-    total_chars  INT,
-    created_at   TIMESTAMPTZ
+    document_id     UUID,
+    doc_title       TEXT,
+    doc_source      TEXT,
+    doc_metadata    JSONB,
+    doc_project_ids UUID[],
+    doc_project_names TEXT[],
+    version_id      UUID,
+    full_content    TEXT,
+    chunk_count     INT,
+    total_chars     INT,
+    created_at      TIMESTAMPTZ
 )
 LANGUAGE sql
 SECURITY DEFINER
@@ -802,6 +836,11 @@ AS $$
         d.title         AS doc_title,
         d.source        AS doc_source,
         d.metadata      AS doc_metadata,
+        ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+              WHERE dp.document_id = d.id) AS doc_project_ids,
+        ARRAY(SELECT p.name FROM cerefox_projects p
+              JOIN cerefox_document_projects dp ON p.id = dp.project_id
+              WHERE dp.document_id = d.id) AS doc_project_names,
         p_version_id    AS version_id,
         STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index) AS full_content,
         COUNT(*)::INT   AS chunk_count,
@@ -846,18 +885,14 @@ AS $$
     ORDER BY created_at DESC;
 $$;
 
--- ── cerefox_delete_document ──────────────────────────────────────────────────
--- Deletes a document and creates an audit entry recording the deletion.
--- The audit entry captures the document title and size before deletion.
--- After deletion, the audit entry's document_id becomes NULL (ON DELETE SET NULL)
--- but the description preserves the document identity.
---
--- Parameters:
---   p_document_id  : UUID of the document to delete
---   p_author       : who performed the deletion
---   p_author_type  : 'user' or 'agent'
+-- ── cerefox_delete_document (soft delete) ────────────────────────────────────
+-- Soft-deletes a document by setting deleted_at = NOW(). The document, its
+-- chunks, and versions remain in the database but are excluded from search.
+-- Use cerefox_purge_document for permanent deletion.
+-- Use cerefox_restore_document to undo a soft delete.
 
 DROP FUNCTION IF EXISTS cerefox_delete_document(UUID, TEXT, TEXT);
+DROP FUNCTION IF EXISTS cerefox_delete_document(UUID);
 CREATE FUNCTION cerefox_delete_document(
     p_document_id   UUID,
     p_author        TEXT    DEFAULT 'unknown',
@@ -872,7 +907,6 @@ DECLARE
     v_title      TEXT;
     v_total_chars INT;
 BEGIN
-    -- Capture document info before deletion
     SELECT title, total_chars INTO v_title, v_total_chars
     FROM cerefox_documents WHERE id = p_document_id;
 
@@ -880,7 +914,9 @@ BEGIN
         RAISE EXCEPTION 'Document % not found', p_document_id;
     END IF;
 
-    -- Create audit entry BEFORE deletion (so document_id FK is still valid)
+    -- Soft delete: set deleted_at timestamp
+    UPDATE cerefox_documents SET deleted_at = NOW() WHERE id = p_document_id;
+
     PERFORM cerefox_create_audit_entry(
         p_document_id := p_document_id,
         p_operation := 'delete',
@@ -888,11 +924,86 @@ BEGIN
         p_author_type := p_author_type,
         p_size_before := v_total_chars,
         p_size_after := 0,
-        p_description := 'Deleted document: ' || COALESCE(v_title, '(untitled)') ||
+        p_description := 'Soft-deleted document: ' || COALESCE(v_title, '(untitled)') ||
+                         ' (' || COALESCE(v_total_chars, 0) || ' chars)'
+    );
+END;
+$$;
+
+-- ── cerefox_restore_document ─────────────────────────────────────────────────
+-- Restores a soft-deleted document by clearing deleted_at.
+
+CREATE OR REPLACE FUNCTION cerefox_restore_document(
+    p_document_id   UUID,
+    p_author        TEXT    DEFAULT 'unknown',
+    p_author_type   TEXT    DEFAULT 'user'
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_title      TEXT;
+    v_total_chars INT;
+BEGIN
+    SELECT title, total_chars INTO v_title, v_total_chars
+    FROM cerefox_documents WHERE id = p_document_id AND deleted_at IS NOT NULL;
+
+    IF v_title IS NULL THEN
+        RETURN;  -- Not found or not deleted
+    END IF;
+
+    UPDATE cerefox_documents SET deleted_at = NULL WHERE id = p_document_id;
+
+    PERFORM cerefox_create_audit_entry(
+        p_document_id := p_document_id,
+        p_operation := 'restore',
+        p_author := p_author,
+        p_author_type := p_author_type,
+        p_size_before := 0,
+        p_size_after := v_total_chars,
+        p_description := 'Restored document: ' || COALESCE(v_title, '(untitled)')
+    );
+END;
+$$;
+
+-- ── cerefox_purge_document ───────────────────────────────────────────────────
+-- Permanently deletes a soft-deleted document (CASCADE). Only works on
+-- documents that are already soft-deleted (deleted_at IS NOT NULL).
+
+CREATE OR REPLACE FUNCTION cerefox_purge_document(
+    p_document_id   UUID,
+    p_author        TEXT    DEFAULT 'unknown',
+    p_author_type   TEXT    DEFAULT 'user'
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_title      TEXT;
+    v_total_chars INT;
+BEGIN
+    SELECT title, total_chars INTO v_title, v_total_chars
+    FROM cerefox_documents WHERE id = p_document_id AND deleted_at IS NOT NULL;
+
+    IF v_title IS NULL THEN
+        RETURN;  -- Not found or not soft-deleted
+    END IF;
+
+    PERFORM cerefox_create_audit_entry(
+        p_document_id := p_document_id,
+        p_operation := 'delete',
+        p_author := p_author,
+        p_author_type := p_author_type,
+        p_size_before := v_total_chars,
+        p_size_after := 0,
+        p_description := 'Permanently deleted document: ' || COALESCE(v_title, '(untitled)') ||
                          ' (' || COALESCE(v_total_chars, 0) || ' chars)'
     );
 
-    -- Delete document (cascades to chunks, versions, project associations)
     DELETE FROM cerefox_documents WHERE id = p_document_id;
 END;
 $$;
@@ -1171,4 +1282,328 @@ AS $$
       AND d.metadata != '{}'::jsonb
     GROUP BY k.key
     ORDER BY doc_count DESC, k.key;
+$$;
+
+-- ── cerefox_list_projects ────────────────────────────────────────────────────
+-- Lists all projects. Used by MCP tools for project discovery and by the
+-- web UI for project name dropdowns.
+
+CREATE OR REPLACE FUNCTION cerefox_list_projects()
+RETURNS TABLE (
+    id          UUID,
+    name        TEXT,
+    description TEXT
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT p.id, p.name, p.description
+    FROM cerefox_projects p
+    ORDER BY p.name;
+$$;
+
+-- ── cerefox_metadata_search ──────────────────────────────────────────────────
+-- Query documents by metadata key-value criteria without a text search term.
+-- Uses JSONB containment (@>) which leverages the existing GIN index on
+-- cerefox_documents.metadata.
+--
+-- Parameters:
+--   p_metadata_filter : JSONB containment filter (AND semantics for all keys)
+--   p_project_id      : Optional project UUID filter
+--   p_updated_since   : Only docs updated on or after this timestamp
+--   p_created_since   : Only docs created on or after this timestamp
+--   p_limit           : Max results (default 10)
+--   p_include_content : When TRUE, reconstruct full text from current chunks
+--   p_max_bytes       : Byte budget for accumulated content (NULL = no limit)
+
+CREATE OR REPLACE FUNCTION cerefox_metadata_search(
+    p_metadata_filter   JSONB,
+    p_project_id        UUID        DEFAULT NULL,
+    p_updated_since     TIMESTAMPTZ DEFAULT NULL,
+    p_created_since     TIMESTAMPTZ DEFAULT NULL,
+    p_limit             INT         DEFAULT 10,
+    p_include_content   BOOLEAN     DEFAULT FALSE,
+    p_max_bytes         INT         DEFAULT NULL
+)
+RETURNS TABLE (
+    document_id     UUID,
+    title           TEXT,
+    doc_metadata    JSONB,
+    review_status   TEXT,
+    source          TEXT,
+    created_at      TIMESTAMPTZ,
+    updated_at      TIMESTAMPTZ,
+    total_chars     INT,
+    chunk_count     INT,
+    project_ids     UUID[],
+    project_names   TEXT[],
+    version_count   INT,
+    content         TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_bytes_used INT := 0;
+    v_row RECORD;
+    v_row_bytes INT;
+BEGIN
+    FOR v_row IN
+        SELECT
+            d.id              AS document_id,
+            d.title,
+            d.metadata        AS doc_metadata,
+            d.review_status,
+            d.source,
+            d.created_at,
+            d.updated_at,
+            d.total_chars,
+            d.chunk_count,
+            ARRAY(SELECT dp.project_id FROM cerefox_document_projects dp
+                  WHERE dp.document_id = d.id) AS project_ids,
+            ARRAY(SELECT p.name FROM cerefox_projects p
+                  JOIN cerefox_document_projects dp ON p.id = dp.project_id
+                  WHERE dp.document_id = d.id) AS project_names,
+            (SELECT COUNT(*)::INT FROM cerefox_document_versions dv
+             WHERE dv.document_id = d.id) AS version_count,
+            CASE WHEN p_include_content THEN
+                (SELECT STRING_AGG(c.content, E'\n\n' ORDER BY c.chunk_index)
+                 FROM cerefox_chunks c
+                 WHERE c.document_id = d.id AND c.version_id IS NULL)
+            ELSE NULL END AS content
+        FROM cerefox_documents d
+        WHERE d.metadata @> p_metadata_filter
+          AND (p_project_id IS NULL OR EXISTS (
+                  SELECT 1 FROM cerefox_document_projects dp
+                  WHERE dp.document_id = d.id AND dp.project_id = p_project_id
+              ))
+          AND (p_updated_since IS NULL OR d.updated_at >= p_updated_since)
+          AND (p_created_since IS NULL OR d.created_at >= p_created_since)
+        ORDER BY d.updated_at DESC
+        LIMIT p_limit
+    LOOP
+        -- Byte budget enforcement (when p_max_bytes is set and content is included)
+        IF p_max_bytes IS NOT NULL AND p_include_content AND v_row.content IS NOT NULL THEN
+            v_row_bytes := octet_length(v_row.content);
+            IF v_bytes_used + v_row_bytes > p_max_bytes THEN
+                EXIT;  -- stop emitting rows
+            END IF;
+            v_bytes_used := v_bytes_used + v_row_bytes;
+        END IF;
+
+        document_id   := v_row.document_id;
+        title         := v_row.title;
+        doc_metadata  := v_row.doc_metadata;
+        review_status := v_row.review_status;
+        source        := v_row.source;
+        created_at    := v_row.created_at;
+        updated_at    := v_row.updated_at;
+        total_chars   := v_row.total_chars;
+        chunk_count   := v_row.chunk_count;
+        project_ids   := v_row.project_ids;
+        project_names := v_row.project_names;
+        version_count := v_row.version_count;
+        content       := v_row.content;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+-- ── cerefox_get_config / cerefox_set_config ──────────────────────────────────
+-- Read/write key-value config from cerefox_config table.
+
+CREATE OR REPLACE FUNCTION cerefox_get_config(p_key TEXT)
+RETURNS TEXT
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT value FROM cerefox_config WHERE key = p_key;
+$$;
+
+CREATE OR REPLACE FUNCTION cerefox_set_config(p_key TEXT, p_value TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_allowed TEXT[] := ARRAY['usage_tracking_enabled'];
+BEGIN
+    IF NOT (p_key = ANY(v_allowed)) THEN
+        RAISE EXCEPTION 'Unknown config key: %. Allowed keys: %', p_key, v_allowed;
+    END IF;
+
+    INSERT INTO cerefox_config (key, value)
+    VALUES (p_key, p_value)
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+END;
+$$;
+
+-- ── cerefox_log_usage ────────────────────────────────────────────────────────
+-- Insert a usage log entry. Checks config first; no-op if tracking is disabled.
+
+CREATE OR REPLACE FUNCTION cerefox_log_usage(
+    p_operation    TEXT,
+    p_access_path  TEXT,
+    p_requestor       TEXT        DEFAULT NULL,
+    p_document_id  UUID        DEFAULT NULL,
+    p_project_id   UUID        DEFAULT NULL,
+    p_query_text   TEXT        DEFAULT NULL,
+    p_result_count INT         DEFAULT NULL,
+    p_extra        JSONB       DEFAULT '{}'::JSONB
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_enabled TEXT;
+BEGIN
+    SELECT value INTO v_enabled FROM cerefox_config WHERE key = 'usage_tracking_enabled';
+    IF v_enabled IS NULL OR v_enabled != 'true' THEN
+        RETURN;
+    END IF;
+
+    INSERT INTO cerefox_usage_log (
+        operation, access_path, requestor, document_id, project_id,
+        query_text, result_count, extra
+    ) VALUES (
+        p_operation, p_access_path, p_requestor, p_document_id, p_project_id,
+        p_query_text, p_result_count, p_extra
+    );
+END;
+$$;
+
+-- ── cerefox_list_usage_log ───────────────────────────────────────────────────
+-- Query usage log with optional filters.
+
+CREATE OR REPLACE FUNCTION cerefox_list_usage_log(
+    p_start       TIMESTAMPTZ DEFAULT NULL,
+    p_end         TIMESTAMPTZ DEFAULT NULL,
+    p_operation   TEXT        DEFAULT NULL,
+    p_access_path TEXT        DEFAULT NULL,
+    p_requestor      TEXT        DEFAULT NULL,
+    p_project_id  UUID        DEFAULT NULL,
+    p_limit       INT         DEFAULT 100
+)
+RETURNS TABLE (
+    id           UUID,
+    logged_at    TIMESTAMPTZ,
+    operation    TEXT,
+    access_path  TEXT,
+    requestor    TEXT,
+    document_id  UUID,
+    doc_title    TEXT,
+    project_id   UUID,
+    query_text   TEXT,
+    result_count INT,
+    extra        JSONB
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT
+        ul.id,
+        ul.logged_at,
+        ul.operation,
+        ul.access_path,
+        ul.requestor,
+        ul.document_id,
+        d.title AS doc_title,
+        ul.project_id,
+        ul.query_text,
+        ul.result_count,
+        ul.extra
+    FROM cerefox_usage_log ul
+    LEFT JOIN cerefox_documents d ON ul.document_id = d.id
+    WHERE (p_start IS NULL       OR ul.logged_at >= p_start)
+      AND (p_end IS NULL         OR ul.logged_at <= p_end)
+      AND (p_operation IS NULL   OR ul.operation = p_operation)
+      AND (p_access_path IS NULL OR ul.access_path = p_access_path)
+      AND (p_requestor IS NULL      OR ul.requestor = p_requestor)
+      AND (p_project_id IS NULL  OR ul.project_id = p_project_id)
+    ORDER BY ul.logged_at DESC
+    LIMIT p_limit;
+$$;
+
+-- ── cerefox_usage_summary ────────────────────────────────────────────────────
+-- Returns a JSON object with aggregated stats for the analytics page.
+
+CREATE OR REPLACE FUNCTION cerefox_usage_summary(
+    p_start       TIMESTAMPTZ DEFAULT NULL,
+    p_end         TIMESTAMPTZ DEFAULT NULL,
+    p_project_id  UUID        DEFAULT NULL,
+    p_access_path TEXT        DEFAULT NULL
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_result JSON;
+BEGIN
+    WITH filtered AS (
+        SELECT *
+        FROM cerefox_usage_log ul
+        WHERE (p_start IS NULL       OR ul.logged_at >= p_start)
+          AND (p_end IS NULL         OR ul.logged_at <= p_end)
+          AND (p_project_id IS NULL  OR ul.project_id = p_project_id)
+          AND (p_access_path IS NULL OR ul.access_path = p_access_path)
+    ),
+    ops_by_day AS (
+        SELECT DATE(logged_at) AS day, COUNT(*) AS count
+        FROM filtered
+        GROUP BY DATE(logged_at)
+        ORDER BY day
+    ),
+    ops_by_operation AS (
+        SELECT operation, COUNT(*) AS count
+        FROM filtered
+        GROUP BY operation
+        ORDER BY count DESC
+    ),
+    ops_by_access_path AS (
+        SELECT access_path, COUNT(*) AS count
+        FROM filtered
+        GROUP BY access_path
+        ORDER BY count DESC
+    ),
+    top_documents AS (
+        SELECT f.document_id, d.title AS doc_title, COUNT(*) AS count
+        FROM filtered f
+        JOIN cerefox_documents d ON f.document_id = d.id
+        WHERE f.document_id IS NOT NULL
+        GROUP BY f.document_id, d.title
+        ORDER BY count DESC
+        LIMIT 10
+    ),
+    top_requestors AS (
+        SELECT requestor, COUNT(*) AS count
+        FROM filtered
+        WHERE requestor IS NOT NULL
+        GROUP BY requestor
+        ORDER BY count DESC
+        LIMIT 10
+    )
+    SELECT json_build_object(
+        'total_count', (SELECT COUNT(*) FROM filtered),
+        'ops_by_day', COALESCE((SELECT json_agg(json_build_object('day', day, 'count', count)) FROM ops_by_day), '[]'::JSON),
+        'ops_by_operation', COALESCE((SELECT json_agg(json_build_object('operation', operation, 'count', count)) FROM ops_by_operation), '[]'::JSON),
+        'ops_by_access_path', COALESCE((SELECT json_agg(json_build_object('access_path', access_path, 'count', count)) FROM ops_by_access_path), '[]'::JSON),
+        'top_documents', COALESCE((SELECT json_agg(json_build_object('document_id', document_id, 'doc_title', doc_title, 'count', count)) FROM top_documents), '[]'::JSON),
+        'top_requestors', COALESCE((SELECT json_agg(json_build_object('requestor', requestor, 'count', count)) FROM top_requestors), '[]'::JSON)
+    ) INTO v_result;
+
+    RETURN v_result;
+END;
 $$;
