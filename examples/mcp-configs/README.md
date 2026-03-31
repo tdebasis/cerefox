@@ -31,14 +31,14 @@ placeholders with your Supabase project values.
 Claude Code's native Streamable HTTP transport maintains an SSE (Server-Sent Events)
 connection that generates continuous GET polling at ~5 requests/second — even when idle.
 This burns through Supabase Edge Function invocations at ~130-198K/day, quickly exhausting
-the 2M/month Pro Plan quota.
+the Supabase Edge Function quota (500K/month on Free, 2M/month on Pro).
 
 The `mcp-remote` stdio bridge wraps the HTTP endpoint in a local process, eliminating the
 SSE polling entirely. Actual tool calls still reach the Edge Function as expected — only the
 idle overhead is removed.
 
-See [#7](https://github.com/tdebasis/cerefox/issues/7) for the full investigation and
-verification results.
+See [issue #17](https://github.com/fstamatelopoulos/cerefox/issues/17) for the full
+investigation and verification results.
 
 ### Why not `mcp-remote` for Claude Desktop?
 
