@@ -1250,3 +1250,18 @@ class TestUsageTracking:
         assert "ops_by_access_path" in summary
         assert "top_documents" in summary
         assert "top_requestors" in summary
+
+    def test_requestor_enforcement_config_keys(self, e2e_client: CerefoxClient):
+        """6.6: require_requestor_identity and requestor_identity_format config keys work."""
+        # Set and read back
+        e2e_client.set_config("require_requestor_identity", "false")
+        val = e2e_client.get_config("require_requestor_identity")
+        assert val == "false"
+
+        e2e_client.set_config("requestor_identity_format", "^[a-zA-Z0-9_: -]+$")
+        val = e2e_client.get_config("requestor_identity_format")
+        assert val == "^[a-zA-Z0-9_: -]+$"
+
+        # Clean up
+        e2e_client.set_config("require_requestor_identity", "false")
+        e2e_client.set_config("requestor_identity_format", "")
