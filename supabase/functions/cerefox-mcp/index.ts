@@ -358,14 +358,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return new Response(null, { status: 200, headers: CORS_HEADERS });
   }
 
-  // GET -- health check for MCP clients that probe before connecting
+  // GET -- per MCP spec (2025-03-26), return 405 to indicate this server does
+  // not support SSE notifications via GET. This prevents MCP clients from
+  // maintaining a persistent SSE polling connection that generates continuous
+  // Edge Function invocations (~1/sec per client, ~86K/day).
   if (req.method === "GET") {
-    return jsonResponse({
-      name: SERVER_NAME,
-      version: SERVER_VERSION,
-      protocol: "mcp",
-      protocolVersion: MCP_VERSION,
-      status: "ok",
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: CORS_HEADERS,
     });
   }
 
