@@ -286,7 +286,7 @@ npx supabase functions deploy cerefox-mcp
 > transport maintains an SSE connection that polls the Edge Function at ~5 GET requests/second
 > even when idle — burning ~130-198K invocations/day against your Supabase quota. Using
 > `mcp-remote` as a stdio bridge eliminates this overhead while keeping all functionality
-> intact. See [#7](https://github.com/tdebasis/cerefox/issues/7) for details.
+> intact. See [issue #17](https://github.com/fstamatelopoulos/cerefox/issues/17) for details.
 
 **Option 1 — `mcp-remote` (recommended):**
 
