@@ -82,6 +82,21 @@ const TOOLS = [
     },
   },
   {
+    name: "hub_search",
+    description: "Search hub message history (read and unread).",
+    inputSchema: {
+      type: "object",
+      required: ["conclave", "since"],
+      properties: {
+        conclave: { type: "string", description: "Conclave name to search (e.g., 'personal')" },
+        since: { type: "string", description: "Date or datetime — return messages after this (e.g., '2026-03-25' or '2026-03-25T14:00:00Z')" },
+        from_conclave: { type: "string", description: "Filter by sender conclave (optional)" },
+        from_agent: { type: "string", description: "Filter by sender agent (optional)" },
+        include_broadcast: { type: "boolean", description: "Include messages addressed to 'all' (default: true)" },
+      },
+    },
+  },
+  {
     name: "hub_mark_read",
     description: "Mark a hub message as received/processed.",
     inputSchema: {
@@ -156,6 +171,56 @@ async function handlePoll(args: Record<string, unknown>): Promise<string> {
   return `${messages.length} unread message(s):\n\n${lines.join("\n\n---\n\n")}`;
 }
 
+async function handleSearch(args: Record<string, unknown>): Promise<string> {
+  const supabase = makeSupabaseClient();
+  const conclave = args.conclave as string;
+  const since = args.since as string;
+  const fromConclave = args.from_conclave as string | undefined;
+  const fromAgent = args.from_agent as string | undefined;
+  const includeBroadcast = args.include_broadcast !== false;
+
+  let query = supabase
+    .from("hub_messages")
+    .select("*")
+    .gt("created_at", since)
+    .order("created_at", { ascending: false });
+
+  if (includeBroadcast) {
+    query = query.or(`to_conclave.eq.${conclave},to_conclave.eq.all`);
+  } else {
+    query = query.eq("to_conclave", conclave);
+  }
+
+  if (fromConclave) {
+    query = query.eq("from_conclave", fromConclave);
+  }
+  if (fromAgent) {
+    query = query.eq("from_agent", fromAgent);
+  }
+
+  const { data, error } = await query;
+
+  if (error) throw new Error(`Query error: ${error.message}`);
+
+  const messages = data ?? [];
+
+  if (messages.length === 0) {
+    return "No messages found.";
+  }
+
+  const lines = messages.map((m: Record<string, unknown>) => {
+    const status = m.received_at ? `read by ${m.received_by} at ${m.received_at}` : "unread";
+    return (
+      `## ${m.subject}\n` +
+      `**From:** ${m.from_conclave}:${m.from_agent} | **To:** ${m.to_conclave}:${m.to_agent} | **ID:** ${m.id}\n` +
+      `**Sent:** ${m.created_at} | **Status:** ${status}\n\n` +
+      `${m.body}`
+    );
+  });
+
+  return `${messages.length} message(s):\n\n${lines.join("\n\n---\n\n")}`;
+}
+
 async function handleMarkRead(args: Record<string, unknown>): Promise<string> {
   const supabase = makeSupabaseClient();
 
@@ -178,6 +243,7 @@ async function dispatchTool(name: string, args: Record<string, unknown>): Promis
   switch (name) {
     case "hub_send": return await handleSend(args);
     case "hub_poll": return await handlePoll(args);
+    case "hub_search": return await handleSearch(args);
     case "hub_mark_read": return await handleMarkRead(args);
     default: throw new Error(`Unknown tool: ${name}`);
   }

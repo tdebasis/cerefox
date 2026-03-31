@@ -127,7 +127,7 @@ def test_tools_list(hub_client: HubMCPClient) -> None:
     resp = hub_client.call("tools/list")
     tools = resp["result"]["tools"]
     names = [t["name"] for t in tools]
-    assert sorted(names) == ["hub_mark_read", "hub_poll", "hub_send"]
+    assert sorted(names) == ["hub_mark_read", "hub_poll", "hub_search", "hub_send"]
 
 
 def test_get_returns_405(hub_client: HubMCPClient) -> None:
@@ -243,3 +243,77 @@ def test_poll_broadcast(hub_client: HubMCPClient) -> None:
         "include_broadcast": False,
     })
     assert subject not in poll_text_no_bc
+
+
+def test_search_includes_read_messages(hub_client: HubMCPClient) -> None:
+    """hub_search returns messages even after they are marked read."""
+    subject = _unique_subject("search-read")
+    since_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Send and mark read
+    send_text = hub_client.tool_text("hub_send", {
+        "from_conclave": "test",
+        "from_agent": "steward",
+        "to_conclave": "test-search",
+        "subject": subject,
+        "body": "Search me after read",
+    })
+    msg_id = send_text.split("id: ")[1].strip(")")
+
+    hub_client.tool_text("hub_mark_read", {
+        "message_id": msg_id,
+        "receiver": "test-search:archivist",
+    })
+
+    # hub_poll should NOT find it (already read)
+    poll_text = hub_client.tool_text("hub_poll", {"conclave": "test-search"})
+    assert subject not in poll_text
+
+    # hub_search SHOULD find it
+    search_text = hub_client.tool_text("hub_search", {
+        "conclave": "test-search",
+        "since": since_ts,
+    })
+    assert subject in search_text
+    assert "read by" in search_text
+
+
+def test_search_with_sender_filters(hub_client: HubMCPClient) -> None:
+    """hub_search filters by from_conclave and from_agent."""
+    subject_a = _unique_subject("search-filter-a")
+    subject_b = _unique_subject("search-filter-b")
+    since_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    # Send from two different senders
+    hub_client.tool_text("hub_send", {
+        "from_conclave": "alpha",
+        "from_agent": "steward",
+        "to_conclave": "test-search-filter",
+        "subject": subject_a,
+        "body": "From alpha",
+    })
+    hub_client.tool_text("hub_send", {
+        "from_conclave": "beta",
+        "from_agent": "archivist",
+        "to_conclave": "test-search-filter",
+        "subject": subject_b,
+        "body": "From beta",
+    })
+
+    # Search filtered by from_conclave
+    search_text = hub_client.tool_text("hub_search", {
+        "conclave": "test-search-filter",
+        "since": since_ts,
+        "from_conclave": "alpha",
+    })
+    assert subject_a in search_text
+    assert subject_b not in search_text
+
+    # Search filtered by from_agent
+    search_text = hub_client.tool_text("hub_search", {
+        "conclave": "test-search-filter",
+        "since": since_ts,
+        "from_agent": "archivist",
+    })
+    assert subject_b in search_text
+    assert subject_a not in search_text
