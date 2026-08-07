@@ -57,6 +57,7 @@ import { registerListVersions } from "./commands/list-versions.ts";
 import { registerMcp } from "./commands/mcp.ts";
 import { registerEmbedderWarmup } from "./commands/embedder-warmup.ts";
 import { registerMetadataSearch } from "./commands/metadata-search.ts";
+import { registerMigrateFormat } from "./commands/migrate-format.ts";
 import { registerReindex } from "./commands/reindex.ts";
 import { registerRestore } from "./commands/restore.ts";
 import { registerSearch } from "./commands/search.ts";
@@ -151,7 +152,7 @@ export function buildProgram(): Command {
         "  audit      list\n" +
         "  config     list · get · set\n" +
         "  backup     create · restore\n" +
-        "  server     deploy · reindex\n" +
+        "  server     deploy · reindex · migrate-format\n" +
         "  guides     list · open · show · ingest   (bundled documentation)\n" +
         "\nTop-level commands:\n" +
         "  search · init · doctor · status · configure-agent · self-update\n" +
@@ -242,9 +243,10 @@ export function buildProgram(): Command {
   moveInto(backup, registerBackup, "create");
   moveInto(backup, registerRestore, "restore");
 
-  const server = program.command("server").description("Server side: deploy, reindex.");
+  const server = program.command("server").description("Server side: deploy, reindex, migrate-format.");
   moveInto(server, registerDeployServer, "deploy");
   moveInto(server, registerReindex, "reindex");
+  moveInto(server, registerMigrateFormat, "migrate-format");
 
   // v0.9.1: the bundled documentation — renamed from flat `docs` (disambiguates
   // from the `document` resource) + merged with `sync-self-docs` as `ingest`.
